@@ -133,20 +133,40 @@ def calculate_position_bcrlb(
     sigma_phi_sq: float
 ) -> float:
     """
-    BCRLB = (c²/(8π²f_c²)) * (σ_eff²/(M|g|²|B|²)) * e^(σ_φ²)
-    """
-    # 确保使用f_c的平方！
-    term1 = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)  # ← 检查这里
+    Calculate Position Bayesian Cramér-Rao Lower Bound.
     
-    # SNR相关项
-    P_rx = (channel_gain**2) * (B**2)  # 假设单位发射功率
+    Implements Eq. (49) from the manuscript:
+    BCRLB_position = (c²/(8π²f_c²)) * (σ_eff²/(M|g|²|B|²)) * e^(σ_φ²)
+    
+    Args:
+        f_c: Carrier frequency [Hz] (SI unit)
+        sigma_eff_sq: Effective noise variance
+        M: Number of pilot symbols
+        channel_gain: Channel gain magnitude |g|
+        B: Bussgang gain magnitude |B|
+        sigma_phi_sq: Phase noise variance [rad²]
+        
+    Returns:
+        Position BCRLB [m²] (SI unit)
+    """
+    # 分步计算以确保正确性
+    
+    # 第一项：基本测距分辨率（与f_c²成反比）
+    c_squared = PhysicalConstants.c ** 2
+    freq_squared = f_c ** 2  # 确保是平方！
+    term1 = c_squared / (8 * np.pi**2 * freq_squared)
+    
+    # 第二项：SNR相关因子
+    P_rx = (channel_gain ** 2) * (B ** 2)  # 假设单位发射功率
     term2 = sigma_eff_sq / (M * P_rx)
     
-    # 相位噪声惩罚
+    # 第三项：相位噪声惩罚
     term3 = np.exp(sigma_phi_sq)
     
-    bcrlb = term1 * term2 * term3
-    return bcrlb
+    # 总BCRLB
+    bcrlb_position = term1 * term2 * term3
+    
+    return bcrlb_position
 
 
 def simulate_ranging_crlb_vs_snr():

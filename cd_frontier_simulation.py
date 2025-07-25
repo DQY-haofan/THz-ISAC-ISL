@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """
-cd_frontier_simulation.py
+cd_frontier_simulation.py - FIXED VERSION
 
-Implementation of the Capacity-Distortion trade-off for THz LEO-ISL ISAC systems.
-Implements the modified Blahut-Arimoto algorithm (Algorithm 1) from the manuscript
-to find the Pareto-optimal frontier between communication rate and sensing accuracy.
-
-Based on "Fundamental Limits of THz Inter-Satellite ISAC Under Hardware Impairments"
-
-Author: THz ISL ISAC Simulation Team
-Date: 2024
+关键修正：
+1. 只考虑可观测参数（距离、径向速度）
+2. 修正噪声计算
+3. 修正FIM维度
 """
 
 import numpy as np
@@ -54,7 +50,15 @@ class ISACSystem:
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
                  distance: float = 2000e3, n_pilots: int = 64):
-        """Initialize ISAC system with given parameters."""
+        """
+        Initialize ISAC system with given parameters.
+        
+        Args:
+            hardware_profile: Name of hardware profile ('High_Performance' or 'SWaP_Efficient')
+            f_c: Carrier frequency [Hz]
+            distance: ISL distance [m]
+            n_pilots: Number of pilot symbols
+        """
         self.profile = HARDWARE_PROFILES[hardware_profile]
         self.f_c = f_c
         self.distance = distance
@@ -71,8 +75,7 @@ class ISACSystem:
         
         # Constellation design
         self.constellation = self._create_constellation()
-
-
+    
     def _calculate_channel_gain(self) -> float:
         """Calculate channel gain magnitude |g|."""
         antenna_gain = scenario.antenna_gain ** 2  # G_tx * G_rx
@@ -124,21 +127,23 @@ class ISACSystem:
         # Symbol power
         p_symbol = np.abs(symbol)**2 * avg_power
         
-        # Thermal noise
-        N_0 = (self.channel_gain**2 * self.bussgang_gain**2 * avg_power) / snr_nominal
+        # 接收功率
+        p_rx = p_symbol * self.channel_gain**2 * self.bussgang_gain**2
         
-        # Hardware-dependent noise
-        noise_hw = p_symbol * self.channel_gain**2 * self.profile.Gamma_eff
+        # 热噪声（基于发射端SNR定义）
+        N_0 = avg_power / snr_nominal
         
-        # Total noise including phase noise effect
+        # 硬件相关噪声
+        N_hw = p_rx * self.profile.Gamma_eff
+        
+        # 相位噪声影响
         phase_factor = np.exp(self.profile.phase_noise_variance)
-        noise_total = N_0 + noise_hw * phase_factor
         
-        # Signal power at receiver
-        signal_power = p_symbol * self.channel_gain**2 * self.bussgang_gain**2
+        # 总噪声
+        noise_total = N_0 + N_hw * phase_factor
         
         # SINR
-        sinr = signal_power / noise_total
+        sinr = p_rx / noise_total
         
         return sinr
     
@@ -158,75 +163,73 @@ class ISACSystem:
         
         for i, symbol in enumerate(self.constellation):
             sinr = self.calculate_sinr(symbol, avg_power, snr_nominal)
-            I_x[i] = 0.5 * np.log2(1 + sinr)  # Factor of 0.5 for complex channel
+            I_x[i] = np.log2(1 + sinr)  # 复基带信道，无1/2因子
             
         return I_x
     
-    def calculate_bfim(self, avg_power: float, snr_nominal: float) -> np.ndarray:
+    def calculate_bfim_observable(self, avg_power: float, snr_nominal: float) -> np.ndarray:
         """
-        Calculate Bayesian Fisher Information Matrix for position estimation.
+        Calculate Bayesian Fisher Information Matrix for OBSERVABLE parameters.
         
-        关键修正：确保正确处理接收端SNR
+        关键修正：只考虑单链路可观测的参数
+        - 距离 R
+        - 径向速度 v_r
+        
+        Args:
+            avg_power: Average transmit power
+            snr_nominal: Nominal SNR (linear)
+            
+        Returns:
+            2x2 B-FIM for observable parameters
         """
-        # 修正：使用实际接收功率，包含路径损耗
-        P_tx = avg_power  # 发射功率
-        P_rx = P_tx * self.channel_gain**2 * self.bussgang_gain**2  # 接收功率
+        # 接收功率
+        P_tx = avg_power
+        P_rx = P_tx * self.channel_gain**2 * self.bussgang_gain**2
         
-        # 热噪声功率（基于发射端定义的标称SNR）
-        N_0 = P_tx / snr_nominal  # 注意：这是归一化的噪声功率
-        
-        # 修正：计算实际接收端的有效噪声
-        # 包含路径损耗后的热噪声
-        N_0_rx = N_0  # 热噪声不变
-        
-        # 硬件相关噪声（与接收功率成正比）
+        # 计算有效噪声
+        N_0 = P_tx / snr_nominal
         N_hw = P_rx * self.profile.Gamma_eff
+        phase_factor = np.exp(self.profile.phase_noise_variance)
+        sigma_eff_sq = N_0 + N_hw * phase_factor
         
-        # 相位噪声影响
-        phase_penalty = np.exp(self.profile.phase_noise_variance)
-        
-        # 总有效噪声方差
-        sigma_eff_sq = N_0_rx + N_hw * phase_penalty
-        
-        # 实际接收端SNR（用于调试）
-        actual_snr_rx = P_rx / sigma_eff_sq
-        
-        # Phase sensitivity factor
-        phase_factor = (2 * np.pi * self.f_c / PhysicalConstants.c)**2
-        
-        # B-FIM scaling factor - 关键修正
+        # FIM缩放因子
         fim_scale = (2 * self.n_pilots * P_rx * np.exp(-self.profile.phase_noise_variance)) / sigma_eff_sq
         
-        # Simplified B-FIM for position
-        J_B = fim_scale * phase_factor * np.eye(3) / 3
+        # 距离测量的FIM（载波相位灵敏度）
+        phase_sensitivity = (2 * np.pi * self.f_c / PhysicalConstants.c)**2
+        J_range = fim_scale * phase_sensitivity
         
-         # 添加调试输出
-        print(f"\n  DEBUG in calculate_bfim:")
-        print(f"    avg_power = {avg_power:.2e}")
-        print(f"    channel_gain = {self.channel_gain:.2e}")
-        print(f"    P_rx = {P_rx:.2e}")
-        print(f"    sigma_eff_sq = {sigma_eff_sq:.2e}")
-        print(f"    FIM scale = {fim_scale:.2e}")
-        print(f"    FIM diagonal = {J_B[0,0]:.2e}")
-    
-    
+        # 径向速度测量的FIM（多普勒灵敏度）
+        # 假设观测时间T
+        T_obs = self.n_pilots * 1e-6  # 假设每个符号1μs
+        doppler_sensitivity = (2 * np.pi * self.f_c * T_obs / PhysicalConstants.c)**2
+        J_velocity = fim_scale * doppler_sensitivity
+        
+        # 构建2x2 FIM矩阵（对角阵，参数独立）
+        J_B = np.diag([J_range, J_velocity])
+        
         return J_B
     
     def calculate_distortion(self, p_x: np.ndarray, snr_nominal: float) -> float:
         """
-        Calculate sensing distortion as Tr(J_B^{-1}).
+        Calculate sensing distortion as Tr(J_B^{-1}) for observable parameters.
         
-        修正：确保返回合理的非零值
+        Args:
+            p_x: Probability distribution over constellation
+            snr_nominal: Nominal SNR (linear)
+            
+        Returns:
+            Total MSE distortion for observable parameters
         """
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         
         # 防止功率过小
         if avg_power < 1e-10:
-            return 1e10  # 返回大的失真值
+            return 1e10
         
-        J_B = self.calculate_bfim(avg_power, snr_nominal)
+        J_B = self.calculate_bfim_observable(avg_power, snr_nominal)
         
-        # 计算FIM的条件数用于调试
+        # 计算条件数用于调试
         try:
             cond_num = np.linalg.cond(J_B)
             if cond_num > 1e10:
@@ -255,32 +258,12 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
     """
     Modified Blahut-Arimoto algorithm for ISAC C-D trade-off.
     
-    Implements Algorithm 1 from the manuscript.
-    
-    Args:
-        system: ISACSystem instance
-        D_target: Target distortion constraint
-        snr_nominal: Nominal SNR (linear scale)
-        epsilon_lambda: Tolerance for lambda search
-        epsilon_p: Tolerance for distribution convergence
-        max_iterations: Maximum iterations per loop
-        verbose: Print convergence info
-        
-    Returns:
-        Tuple of (capacity, optimal distribution)
+    修正版：使用可观测参数的失真度量
     """
     n_symbols = len(system.constellation)
     
     # Initialize uniform distribution
     p_x = np.ones(n_symbols) / n_symbols
-    
-     # 添加：计算初始失真以验证
-    D_init = system.calculate_distortion(p_x, snr_nominal)
-    if verbose:
-        print(f"  Initial distortion with uniform distribution: {D_init:.6e}")
-        if D_init < 1e-10:
-            print("  ERROR: Initial distortion too small, check path loss calculation!")
-    
     
     # Binary search bounds for Lagrange multiplier
     lambda_min = 0
@@ -355,13 +338,7 @@ def generate_cd_frontier(hardware_profile: str,
     """
     Generate Capacity-Distortion frontier for a given hardware profile.
     
-    Args:
-        hardware_profile: Name of hardware profile
-        n_distortion_points: Number of points on frontier
-        snr_dB: Operating SNR in dB
-        
-    Returns:
-        Tuple of (distortions, capacities)
+    修正版：使用可观测参数
     """
     print(f"\nGenerating C-D frontier for {hardware_profile}...")
     
@@ -384,10 +361,10 @@ def generate_cd_frontier(hardware_profile: str,
     # Use progress bar
     for D_target in tqdm(D_targets, desc=f"{hardware_profile}"):
         try:
-            capacity, _ = modified_blahut_arimoto(system, D_target, snr_linear)
+            capacity, p_opt = modified_blahut_arimoto(system, D_target, snr_linear)
             
             # Verify actual distortion
-            actual_D = system.calculate_distortion(_, snr_linear)
+            actual_D = system.calculate_distortion(p_opt, snr_linear)
             
             capacities.append(capacity)
             distortions.append(actual_D)
@@ -423,59 +400,53 @@ def plot_cd_frontier():
     for i, profile in enumerate(profiles):
         data = results[profile]
         
-        # Convert distortion to precision (1/distortion) for intuitive x-axis
-        precision = 1 / data['ranging_rmse']  # Higher is better
-        
-        # Plot frontier
-        ax.plot(precision, data['capacities'], 
-                color=colors[i], linewidth=3,
-                marker='o', markersize=8,
-                label=profile.replace('_', ' '),
-                markerfacecolor='white',
-                markeredgewidth=2)
-        
-        # Add shaded region under curve
-        ax.fill_between(precision, 0, data['capacities'], 
-                       alpha=0.2, color=colors[i])
+        if len(data['ranging_rmse']) > 0:  # Check if we have data
+            # Convert distortion to ranging precision
+            # 使用距离RMSE的倒数作为精度度量
+            ranging_rmse_m = data['ranging_rmse']
+            
+            # Plot frontier
+            ax.plot(ranging_rmse_m * 1000, data['capacities'],  # Convert to mm
+                    color=colors[i], linewidth=3,
+                    marker='o', markersize=8,
+                    label=profile.replace('_', ' '),
+                    markerfacecolor='white',
+                    markeredgewidth=2)
+            
+            # Add shaded region under curve
+            ax.fill_between(ranging_rmse_m * 1000, 0, data['capacities'], 
+                           alpha=0.2, color=colors[i])
     
     # Formatting
-    ax.set_xlabel('Sensing Precision [1/m]', fontsize=14)
+    ax.set_xlabel('Ranging RMSE [mm]', fontsize=14)
     ax.set_ylabel('Communication Capacity [bits/symbol]', fontsize=14)
     ax.set_title(f'ISAC Capacity-Distortion Trade-off Frontier\n' + 
-                f'(SNR = {snr_dB} dB, f_c = 300 GHz, Distance = 2000 km)',
+                f'(Observable Parameters: Range & Radial Velocity)\n' +
+                f'SNR = {snr_dB} dB, f_c = 300 GHz, Distance = 2000 km',
                 fontsize=16, pad=15)
     
     # Grid and legend
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=12, frameon=True, 
+    ax.legend(loc='upper right', fontsize=12, frameon=True, 
               fancybox=True, shadow=True)
     
     # Set reasonable axis limits
     ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
     
+    # Use log scale for x-axis if range is large
+    ax.set_xscale('log')
+    
     # Add annotations
     ax.annotate('Better sensing,\nlower capacity', 
-                xy=(0.8, 0.2), xycoords='axes fraction',
+                xy=(0.15, 0.3), xycoords='axes fraction',
                 fontsize=11, ha='center',
                 bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.5))
     
     ax.annotate('Better communication,\nworse sensing', 
-                xy=(0.2, 0.8), xycoords='axes fraction',
+                xy=(0.85, 0.7), xycoords='axes fraction',
                 fontsize=11, ha='center',
                 bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.5))
-    
-    # Add example operating points
-    for i, profile in enumerate(profiles):
-        data = results[profile]
-        # Mark a balanced operating point (middle of frontier)
-        mid_idx = len(data['capacities']) // 2
-        if mid_idx < len(data['capacities']):
-            precision_mid = 1 / data['ranging_rmse'][mid_idx]
-            capacity_mid = data['capacities'][mid_idx]
-            ax.plot(precision_mid, capacity_mid, 's', 
-                   color=colors[i], markersize=12,
-                   markeredgewidth=2, markeredgecolor='black')
     
     # Save figure
     plt.tight_layout()
@@ -485,17 +456,19 @@ def plot_cd_frontier():
     
     # Print numerical results
     print("\n=== Capacity-Distortion Trade-off Results ===")
+    print("(Based on observable parameters: range and radial velocity)")
     for profile in profiles:
         data = results[profile]
-        print(f"\n{profile}:")
-        print(f"  Ranging RMSE range: {data['ranging_rmse'].min():.3f} - {data['ranging_rmse'].max():.3f} m")
-        print(f"  Capacity range: {data['capacities'].min():.3f} - {data['capacities'].max():.3f} bits/symbol")
-        
-        # Find balanced point
-        mid_idx = len(data['capacities']) // 2
-        if mid_idx < len(data['capacities']):
-            print(f"  Balanced point: {data['ranging_rmse'][mid_idx]:.3f} m, "
-                  f"{data['capacities'][mid_idx]:.3f} bits/symbol")
+        if len(data['ranging_rmse']) > 0:
+            print(f"\n{profile}:")
+            print(f"  Ranging RMSE range: {data['ranging_rmse'].min()*1000:.3f} - {data['ranging_rmse'].max()*1000:.3f} mm")
+            print(f"  Capacity range: {data['capacities'].min():.3f} - {data['capacities'].max():.3f} bits/symbol")
+            
+            # Find balanced point
+            mid_idx = len(data['capacities']) // 2
+            if mid_idx < len(data['capacities']):
+                print(f"  Balanced point: {data['ranging_rmse'][mid_idx]*1000:.3f} mm, "
+                      f"{data['capacities'][mid_idx]:.3f} bits/symbol")
 
 def plot_constellation_evolution():
     """Additional plot showing how constellation distribution changes along frontier."""
@@ -506,37 +479,44 @@ def plot_constellation_evolution():
     snr_linear = 100  # 20 dB
     
     # Three points on frontier: sensing-focused, balanced, comm-focused
-    D_targets = [1e-6, 1e-4, 1e-2]  # Different distortion targets
+    D_targets = [1e-8, 1e-6, 1e-4]  # Different distortion targets for observable params
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
     for i, (D_target, ax) in enumerate(zip(D_targets, axes)):
-        capacity, p_x = modified_blahut_arimoto(system, D_target, snr_linear, verbose=False)
-        
-        # Plot constellation with probabilities as sizes
-        for j, (symbol, prob) in enumerate(zip(system.constellation, p_x)):
-            ax.scatter(symbol.real, symbol.imag, 
-                      s=prob*2000,  # Scale for visibility
-                      color=colors[0], alpha=0.7,
-                      edgecolors='black', linewidth=1.5)
-            ax.text(symbol.real, symbol.imag + 0.15, f'{prob:.2f}',
-                   ha='center', va='bottom', fontsize=9)
-        
-        ax.set_xlim(-1.5, 1.5)
-        ax.set_ylim(-1.5, 1.5)
-        ax.set_aspect('equal')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlabel('In-phase', fontsize=11)
-        ax.set_ylabel('Quadrature', fontsize=11)
-        
-        if i == 0:
-            ax.set_title(f'Sensing-Focused\n(D = {D_target:.0e}, C = {capacity:.2f})', fontsize=12)
-        elif i == 1:
-            ax.set_title(f'Balanced\n(D = {D_target:.0e}, C = {capacity:.2f})', fontsize=12)
-        else:
-            ax.set_title(f'Comm-Focused\n(D = {D_target:.0e}, C = {capacity:.2f})', fontsize=12)
+        try:
+            capacity, p_x = modified_blahut_arimoto(system, D_target, snr_linear, verbose=False)
+            
+            # Plot constellation with probabilities as sizes
+            for j, (symbol, prob) in enumerate(zip(system.constellation, p_x)):
+                ax.scatter(symbol.real, symbol.imag, 
+                          s=prob*2000,  # Scale for visibility
+                          color=colors[0], alpha=0.7,
+                          edgecolors='black', linewidth=1.5)
+                ax.text(symbol.real, symbol.imag + 0.15, f'{prob:.2f}',
+                       ha='center', va='bottom', fontsize=9)
+            
+            ax.set_xlim(-1.5, 1.5)
+            ax.set_ylim(-1.5, 1.5)
+            ax.set_aspect('equal')
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel('In-phase', fontsize=11)
+            ax.set_ylabel('Quadrature', fontsize=11)
+            
+            # Calculate actual distortion
+            actual_D = system.calculate_distortion(p_x, snr_linear)
+            ranging_rmse_mm = np.sqrt(actual_D) * 1000
+            
+            if i == 0:
+                ax.set_title(f'Sensing-Focused\n(RMSE = {ranging_rmse_mm:.1f} mm, C = {capacity:.2f})', fontsize=12)
+            elif i == 1:
+                ax.set_title(f'Balanced\n(RMSE = {ranging_rmse_mm:.1f} mm, C = {capacity:.2f})', fontsize=12)
+            else:
+                ax.set_title(f'Comm-Focused\n(RMSE = {ranging_rmse_mm:.1f} mm, C = {capacity:.2f})', fontsize=12)
+        except:
+            ax.set_title(f'Failed to converge', fontsize=12)
     
-    plt.suptitle('Constellation Probability Distribution Evolution Along C-D Frontier', fontsize=14)
+    plt.suptitle('Constellation Probability Distribution Evolution Along C-D Frontier\n(Observable Parameters Only)', fontsize=14)
     plt.tight_layout()
     plt.savefig('constellation_evolution.pdf', format='pdf', dpi=300, bbox_inches='tight')
     plt.savefig('constellation_evolution.png', format='png', dpi=300, bbox_inches='tight')
@@ -546,6 +526,10 @@ def main():
     """Main function to run C-D frontier simulations."""
     print("=== THz ISL ISAC Capacity-Distortion Frontier Simulation ===")
     print("Implementing Modified Blahut-Arimoto Algorithm")
+    print("\nIMPORTANT: Using only observable parameters for single ISL:")
+    print("  - Range (distance)")
+    print("  - Radial velocity")
+    print("  (Full 3D position requires multiple non-coplanar links)")
     
     # Generate main C-D frontier plot
     plot_cd_frontier()
