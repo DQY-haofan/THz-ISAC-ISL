@@ -200,6 +200,16 @@ class ISACSystem:
         # Simplified B-FIM for position
         J_B = fim_scale * phase_factor * np.eye(3) / 3
         
+         # 添加调试输出
+        print(f"\n  DEBUG in calculate_bfim:")
+        print(f"    avg_power = {avg_power:.2e}")
+        print(f"    channel_gain = {self.channel_gain:.2e}")
+        print(f"    P_rx = {P_rx:.2e}")
+        print(f"    sigma_eff_sq = {sigma_eff_sq:.2e}")
+        print(f"    FIM scale = {fim_scale:.2e}")
+        print(f"    FIM diagonal = {J_B[0,0]:.2e}")
+    
+    
         return J_B
     
     def calculate_distortion(self, p_x: np.ndarray, snr_nominal: float) -> float:

@@ -133,20 +133,20 @@ def calculate_position_bcrlb(
     sigma_phi_sq: float
 ) -> float:
     """
-    Calculate Position Bayesian Cramér-Rao Lower Bound.
-    
-    确保f_c²依赖性正确实现
+    BCRLB = (c²/(8π²f_c²)) * (σ_eff²/(M|g|²|B|²)) * e^(σ_φ²)
     """
-    # 接收信号功率（用于FIM计算）
-    P_rx = (channel_gain ** 2) * (B ** 2)  # 假设单位发射功率
+    # 确保使用f_c的平方！
+    term1 = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)  # ← 检查这里
     
-    # Fisher信息（与频率平方成正比）
-    FIM = (8 * np.pi**2 * f_c**2 * M * P_rx * np.exp(-sigma_phi_sq)) / (PhysicalConstants.c**2 * sigma_eff_sq)
+    # SNR相关项
+    P_rx = (channel_gain**2) * (B**2)  # 假设单位发射功率
+    term2 = sigma_eff_sq / (M * P_rx)
     
-    # BCRLB是FIM的逆
-    bcrlb_position = 1 / FIM
+    # 相位噪声惩罚
+    term3 = np.exp(sigma_phi_sq)
     
-    return bcrlb_position
+    bcrlb = term1 * term2 * term3
+    return bcrlb
 
 
 def simulate_ranging_crlb_vs_snr():
