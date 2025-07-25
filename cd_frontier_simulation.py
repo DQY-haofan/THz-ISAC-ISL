@@ -213,13 +213,7 @@ class ISACSystem:
     def calculate_distortion(self, p_x: np.ndarray, snr_nominal: float) -> float:
         """
         Calculate sensing distortion as Tr(J_B^{-1}) for observable parameters.
-        
-        Args:
-            p_x: Probability distribution over constellation
-            snr_nominal: Nominal SNR (linear)
-            
-        Returns:
-            Total MSE distortion for observable parameters
+        修正版：确保功率变化正确传播到 FIM
         """
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         
@@ -227,27 +221,33 @@ class ISACSystem:
         if avg_power < 1e-10:
             return 1e10
         
+        # 添加调试输出
+        if hasattr(self, '_debug_count'):
+            self._debug_count += 1
+        else:
+            self._debug_count = 0
+        
+        if self._debug_count % 10 == 0:  # 每10次迭代打印一次
+            print(f"\nDebug distortion calculation:")
+            print(f"  avg_power = {avg_power:.6f}")
+            print(f"  p_x entropy = {-np.sum(p_x * np.log2(p_x + 1e-10)):.3f}")
+        
         J_B = self.calculate_bfim_observable(avg_power, snr_nominal)
         
-        # 计算条件数用于调试
         try:
-            cond_num = np.linalg.cond(J_B)
-            if cond_num > 1e10:
-                print(f"    Warning: FIM ill-conditioned, cond={cond_num:.2e}")
-            
             J_B_inv = inv(J_B)
             distortion = np.trace(J_B_inv)
             
-            # 合理性检查
-            if distortion < 1e-15 or distortion > 1e15:
-                print(f"    Warning: Unrealistic distortion {distortion:.2e}")
-                return 1e10
-                
+            # 添加功率依赖性检查
+            if self._debug_count % 10 == 0:
+                print(f"  distortion = {distortion:.6e}")
+                print(f"  J_B condition number = {np.linalg.cond(J_B):.2e}")
+            
+            return distortion
+            
         except np.linalg.LinAlgError:
             print("    Warning: FIM singular")
             return 1e10
-            
-        return distortion
 
 def modified_blahut_arimoto(system: ISACSystem, D_target: float, 
                            snr_nominal: float = 100,  # 20 dB
@@ -265,6 +265,13 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
     # Initialize uniform distribution
     p_x = np.ones(n_symbols) / n_symbols
     
+    # 记录收敛历史
+    convergence_history = {
+        'lambda': [],
+        'distortion': [],
+        'capacity': []
+    }
+
     # Binary search bounds for Lagrange multiplier
     lambda_min = 0
     lambda_max = 1000  # Initial upper bound
@@ -322,7 +329,12 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
             lambda_min = lambda_current  # Need higher penalty
         else:
             lambda_max = lambda_current  # Can reduce penalty
-            
+
+                # 在内循环中添加：
+        if verbose and inner_iter % 10 == 0:
+            print(f"    Inner iter {inner_iter}: ||Δp||₁ = {np.linalg.norm(p_x - p_x_prev, ord=1):.6f}")
+            print(f"    Current distribution entropy: {-np.sum(p_x * np.log2(p_x + 1e-10)):.3f}")
+                
     # Calculate final capacity
     I_x_final = system.calculate_mutual_information(p_x, snr_nominal)
     capacity = np.sum(p_x * I_x_final)

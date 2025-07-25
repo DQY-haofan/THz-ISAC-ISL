@@ -215,7 +215,6 @@ def simulate_ranging_crlb_vs_snr():
         print(f"  First value: {results[f_GHz][0]:.2e} m")
         print(f"  Last value: {results[f_GHz][-1]:.2e} m")
 
-
 def simulate_ranging_crlb_vs_hardware():
     """Generate Figure 2: Ranging CRLB vs. Hardware Profile at fixed high SNR."""
     print("\nGenerating Figure 2: Ranging CRLB vs. Hardware Profile...")
@@ -260,6 +259,25 @@ def simulate_ranging_crlb_vs_hardware():
         
         print(f"  BCRLB = {bcrlb_pos:.2e} m²")
         print(f"  Ranging RMSE = {ranging_rmse_m:.2e} m")
+        
+        # 添加正确的组件百分比计算
+        print("\n  Hardware Component Breakdown:")
+        # 使用实际组件值计算百分比
+        actual_total = profile.Gamma_PA + profile.Gamma_LO + profile.Gamma_ADC
+        
+        pa_percent = (profile.Gamma_PA / actual_total) * 100
+        lo_percent = (profile.Gamma_LO / actual_total) * 100
+        adc_percent = (profile.Gamma_ADC / actual_total) * 100
+        
+        print(f"    PA contribution: {pa_percent:.1f}%")
+        print(f"    LO contribution: {lo_percent:.3f}%")
+        print(f"    ADC contribution: {adc_percent:.2f}%")
+        print(f"    Total: {pa_percent + lo_percent + adc_percent:.1f}%")  # 应该是 100%
+        
+        # 验证配置的一致性
+        if abs(actual_total - profile.Gamma_eff) / profile.Gamma_eff > 0.1:
+            print(f"    WARNING: Component sum ({actual_total:.4f}) differs from Gamma_eff ({profile.Gamma_eff:.4f}) by >10%")
+            
 
 
 def main():
