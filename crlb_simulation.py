@@ -135,10 +135,7 @@ def calculate_position_bcrlb(
     """
     CRITICAL: 确保 f_c² 依赖性！
     """
-    # 调试：打印中间值
-    print(f"\n  DEBUG BCRLB calculation:")
-    print(f"    f_c = {f_c/1e9:.0f} GHz")
-    print(f"    f_c² = {(f_c/1e9)**2:.0f} GHz²")
+
     
     # 关键：必须使用 f_c 的平方！
     term1 = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
@@ -277,7 +274,7 @@ def simulate_ranging_crlb_vs_hardware():
         # 验证配置的一致性
         if abs(actual_total - profile.Gamma_eff) / profile.Gamma_eff > 0.1:
             print(f"    WARNING: Component sum ({actual_total:.4f}) differs from Gamma_eff ({profile.Gamma_eff:.4f}) by >10%")
-            
+
 
 
 def main():
