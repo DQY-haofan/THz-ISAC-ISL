@@ -245,7 +245,7 @@ def plot_hardware_components():
         
         # Calculate percentages
         total = sum(components.values())
-        percentages = {k: v/total*100 for k, v in components.items()}
+        percentages = {k: v/actual_total*100 for k, v in components.items()}
         
         # Create pie chart
         wedges, texts, autotexts = ax.pie(
@@ -284,10 +284,11 @@ def plot_hardware_components():
     print("\nComponent Analysis:")
     for name, profile in HARDWARE_PROFILES.items():
         print(f"\n{name}:")
-        total = profile.Gamma_PA + profile.Gamma_LO + profile.Gamma_ADC
-        print(f"  PA contribution: {profile.Gamma_PA/total*100:.1f}%")
-        print(f"  LO contribution: {profile.Gamma_LO/total*100:.3f}%")
-        print(f"  ADC contribution: {profile.Gamma_ADC/total*100:.2f}%")
+        actual_total = profile.Gamma_PA + profile.Gamma_LO + profile.Gamma_ADC
+        print(f"  Actual total: {actual_total:.4f} (nominal: {profile.Gamma_eff:.4f})")
+        print(f"  PA contribution: {profile.Gamma_PA/actual_total*100:.1f}%")
+        print(f"  LO contribution: {profile.Gamma_LO/actual_total*100:.3f}%")
+        print(f"  ADC contribution: {profile.Gamma_ADC/actual_total*100:.2f}%")
 
 def main():
     """Main function to run capacity simulations."""

@@ -93,34 +93,28 @@ def calculate_effective_noise_variance(
     """
     Calculate effective noise variance including hardware impairments.
     
-    Args:
-        SNR_linear: Linear SNR (not in dB)
-        channel_gain: Channel gain magnitude |g|
-        hardware_profile: Name of hardware profile to use
-        signal_power: Transmitted signal power (normalized to 1)
-        
-    Returns:
-        Tuple of (σ_eff², N_0) - effective noise variance and thermal noise
+    修正：确保硬件噪声正确计入
     """
     profile = HARDWARE_PROFILES[hardware_profile]
     
     # Calculate thermal noise from SNR definition
-    # SNR = P|g|²|B|²/N_0 (without hardware impairments)
     B = calculate_bussgang_gain()
     N_0 = signal_power * (channel_gain ** 2) * (B ** 2) / SNR_linear
     
-    # PA distortion noise (from Bussgang decomposition)
-    # σ_η² ≈ Γ_PA * P (where P is PA input power)
-    sigma_eta_sq = profile.Gamma_PA * signal_power
+    # 关键修正：使用完整的Gamma_eff而不仅仅是Gamma_PA
+    # 硬件引起的信号相关噪声功率
+    P_rx = signal_power * (channel_gain ** 2) * (B ** 2)  # 接收信号功率
+    sigma_hw_sq = P_rx * profile.Gamma_eff  # 使用总的Gamma_eff
     
     # Phase noise effect (multiplicative factor)
     phase_noise_factor = np.exp(profile.phase_noise_variance)
     
     # DSE residual (from manuscript, negligible after compensation)
-    sigma_DSE_sq = 0.001 / SNR_linear  # From Eq. (29) in manuscript
+    sigma_DSE_sq = 0.001 / SNR_linear
     
     # Total effective noise variance (Eq. (24) in manuscript)
-    sigma_eff_sq = N_0 + (channel_gain ** 2) * phase_noise_factor * sigma_eta_sq + sigma_DSE_sq
+    # 修正：硬件噪声应该乘以相位噪声因子
+    sigma_eff_sq = N_0 + sigma_hw_sq * phase_noise_factor + sigma_DSE_sq
     
     return sigma_eff_sq, N_0
 

@@ -202,10 +202,10 @@ SWAP_EFFICIENT_PROFILE = HardwareProfile(
     description="Silicon-based system optimized for SWaP and cost with DPD",
     
     # Aggregate quality factor  
-    Gamma_eff=0.025,  # From detailed analysis
+    Gamma_eff=0.045,  # From detailed analysis
     
     # Component contributions
-    Gamma_PA=0.0238,          # CMOS with DPD - adjusted for consistency
+    Gamma_PA=0.0438,          # CMOS with DPD - adjusted for consistency
     Gamma_LO=4.8e-6,          # Based on 70 fs RMS jitter
     Gamma_ADC=6.5e-4,         # Based on 5.0 ENOB
     

@@ -54,28 +54,25 @@ class ISACSystem:
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
                  distance: float = 2000e3, n_pilots: int = 64):
-        """
-        Initialize ISAC system with given parameters.
-        
-        Args:
-            hardware_profile: Name of hardware profile ('High_Performance' or 'SWaP_Efficient')
-            f_c: Carrier frequency [Hz]
-            distance: ISL distance [m]
-            n_pilots: Number of pilot symbols
-        """
+        """Initialize ISAC system with given parameters."""
         self.profile = HARDWARE_PROFILES[hardware_profile]
         self.f_c = f_c
         self.distance = distance
         self.n_pilots = n_pilots
         
         # Calculate system parameters
-        self.lambda_c = PhysicalConstants.wavelength(f_c)
+        self.lambda_c = PhysicalConstants.c / f_c
         self.channel_gain = self._calculate_channel_gain()
         self.bussgang_gain = self._calculate_bussgang_gain()
         
-        # Constellation design (QPSK normalized)
-        self.constellation = self._create_constellation()
+        # 添加：计算路径损耗以便调试
+        self.path_loss_dB = 20 * np.log10(4 * np.pi * self.distance / self.lambda_c)
+        print(f"  Path loss at {f_c/1e9:.0f} GHz, {distance/1e3:.0f} km: {self.path_loss_dB:.1f} dB")
         
+        # Constellation design
+        self.constellation = self._create_constellation()
+
+
     def _calculate_channel_gain(self) -> float:
         """Calculate channel gain magnitude |g|."""
         antenna_gain = scenario.antenna_gain ** 2  # G_tx * G_rx
@@ -169,29 +166,38 @@ class ISACSystem:
         """
         Calculate Bayesian Fisher Information Matrix for position estimation.
         
-        Args:
-            avg_power: Average transmit power
-            snr_nominal: Nominal SNR (linear)
-            
-        Returns:
-            3x3 B-FIM for position parameters
+        关键修正：确保正确处理接收端SNR
         """
-        # Effective received power
-        P_rx = avg_power * self.channel_gain**2 * self.bussgang_gain**2
+        # 修正：使用实际接收功率，包含路径损耗
+        P_tx = avg_power  # 发射功率
+        P_rx = P_tx * self.channel_gain**2 * self.bussgang_gain**2  # 接收功率
         
-        # Thermal noise
-        N_0 = P_rx / snr_nominal
+        # 热噪声功率（基于发射端定义的标称SNR）
+        N_0 = P_tx / snr_nominal  # 注意：这是归一化的噪声功率
         
-        # Effective noise variance
-        sigma_eff_sq = N_0 + P_rx * self.profile.Gamma_eff * np.exp(self.profile.phase_noise_variance)
+        # 修正：计算实际接收端的有效噪声
+        # 包含路径损耗后的热噪声
+        N_0_rx = N_0  # 热噪声不变
         
-        # Phase sensitivity factor (dominant at THz)
+        # 硬件相关噪声（与接收功率成正比）
+        N_hw = P_rx * self.profile.Gamma_eff
+        
+        # 相位噪声影响
+        phase_penalty = np.exp(self.profile.phase_noise_variance)
+        
+        # 总有效噪声方差
+        sigma_eff_sq = N_0_rx + N_hw * phase_penalty
+        
+        # 实际接收端SNR（用于调试）
+        actual_snr_rx = P_rx / sigma_eff_sq
+        
+        # Phase sensitivity factor
         phase_factor = (2 * np.pi * self.f_c / PhysicalConstants.c)**2
         
-        # B-FIM scaling factor
+        # B-FIM scaling factor - 关键修正
         fim_scale = (2 * self.n_pilots * P_rx * np.exp(-self.profile.phase_noise_variance)) / sigma_eff_sq
         
-        # Simplified B-FIM for position (assuming equal uncertainty in all directions)
+        # Simplified B-FIM for position
         J_B = fim_scale * phase_factor * np.eye(3) / 3
         
         return J_B
@@ -200,23 +206,33 @@ class ISACSystem:
         """
         Calculate sensing distortion as Tr(J_B^{-1}).
         
-        Args:
-            p_x: Probability distribution over constellation
-            snr_nominal: Nominal SNR (linear)
-            
-        Returns:
-            Total MSE distortion
+        修正：确保返回合理的非零值
         """
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
+        
+        # 防止功率过小
+        if avg_power < 1e-10:
+            return 1e10  # 返回大的失真值
+        
         J_B = self.calculate_bfim(avg_power, snr_nominal)
         
-        # Handle potential numerical issues
+        # 计算FIM的条件数用于调试
         try:
+            cond_num = np.linalg.cond(J_B)
+            if cond_num > 1e10:
+                print(f"    Warning: FIM ill-conditioned, cond={cond_num:.2e}")
+            
             J_B_inv = inv(J_B)
             distortion = np.trace(J_B_inv)
-        except:
-            # If matrix is singular, return large distortion
-            distortion = 1e10
+            
+            # 合理性检查
+            if distortion < 1e-15 or distortion > 1e15:
+                print(f"    Warning: Unrealistic distortion {distortion:.2e}")
+                return 1e10
+                
+        except np.linalg.LinAlgError:
+            print("    Warning: FIM singular")
+            return 1e10
             
         return distortion
 
@@ -247,6 +263,14 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
     
     # Initialize uniform distribution
     p_x = np.ones(n_symbols) / n_symbols
+    
+     # 添加：计算初始失真以验证
+    D_init = system.calculate_distortion(p_x, snr_nominal)
+    if verbose:
+        print(f"  Initial distortion with uniform distribution: {D_init:.6e}")
+        if D_init < 1e-10:
+            print("  ERROR: Initial distortion too small, check path loss calculation!")
+    
     
     # Binary search bounds for Lagrange multiplier
     lambda_min = 0
