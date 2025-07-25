@@ -170,17 +170,7 @@ class ISACSystem:
     def calculate_bfim_observable(self, avg_power: float, snr_nominal: float) -> np.ndarray:
         """
         Calculate Bayesian Fisher Information Matrix for OBSERVABLE parameters.
-        
-        关键修正：只考虑单链路可观测的参数
-        - 距离 R
-        - 径向速度 v_r
-        
-        Args:
-            avg_power: Average transmit power
-            snr_nominal: Nominal SNR (linear)
-            
-        Returns:
-            2x2 B-FIM for observable parameters
+        修正版：使用合理的观测时间
         """
         # 接收功率
         P_tx = avg_power
@@ -200,13 +190,22 @@ class ISACSystem:
         J_range = fim_scale * phase_sensitivity
         
         # 径向速度测量的FIM（多普勒灵敏度）
-        # 假设观测时间T
-        T_obs = self.n_pilots * 1e-6  # 假设每个符号1μs
-        doppler_sensitivity = (2 * np.pi * self.f_c * T_obs / PhysicalConstants.c)**2
+        # 使用更合理的帧时间而不是单个符号时间
+        T_frame = self.profile.frame_duration_s  # 从配置中获取（100 ns）
+        T_obs = T_frame * self.n_pilots  # 总观测时间 = 6.4 μs
+        
+        # 但对于速度测量，我们需要更长的积分时间
+        # 使用CPI (Coherent Processing Interval) 概念
+        T_CPI = 1e-3  # 1 ms 的相干处理间隔（合理的ISL帧长度）
+        
+        doppler_sensitivity = (2 * np.pi * self.f_c * T_CPI / PhysicalConstants.c)**2
         J_velocity = fim_scale * doppler_sensitivity
         
+        # 添加正则化以避免数值问题
+        regularization = 1e-20
+        
         # 构建2x2 FIM矩阵（对角阵，参数独立）
-        J_B = np.diag([J_range, J_velocity])
+        J_B = np.diag([J_range + regularization, J_velocity + regularization])
         
         return J_B
     
@@ -250,7 +249,7 @@ class ISACSystem:
             return 1e10
 
 def modified_blahut_arimoto(system: ISACSystem, D_target: float, 
-                           snr_nominal: float = 100,  # 20 dB
+                           snr_nominal: float = 10000,  # 40 dB
                            epsilon_lambda: float = 1e-3,
                            epsilon_p: float = 1e-6,
                            max_iterations: int = 50,
@@ -262,8 +261,11 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
     """
     n_symbols = len(system.constellation)
     
-    # Initialize uniform distribution
-    p_x = np.ones(n_symbols) / n_symbols
+    # 更好的初始化：使用高功率符号
+    p_x = np.zeros(n_symbols)
+    max_power_idx = np.argmax(np.abs(system.constellation)**2)
+    p_x[max_power_idx] = 0.8  # 集中80%功率到最强符号
+    p_x[p_x == 0] = 0.2 / (n_symbols - 1)  # 剩余20%均匀分布
     
     # 记录收敛历史
     convergence_history = {
@@ -346,7 +348,7 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
 
 def generate_cd_frontier(hardware_profile: str, 
                         n_distortion_points: int = 20,
-                        snr_dB: float = 20) -> Tuple[np.ndarray, np.ndarray]:
+                        snr_dB: float = 40) -> Tuple[np.ndarray, np.ndarray]:
     """
     Generate Capacity-Distortion frontier for a given hardware profile.
     
