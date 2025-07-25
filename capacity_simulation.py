@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-capacity_simulation.py
+capacity_simulation.py - FINAL FIXED VERSION
 
-Simulation of communication capacity for THz LEO-ISL ISAC systems.
-Demonstrates the hardware-limited capacity ceiling versus ideal AWGN channel.
-
-Based on "Fundamental Limits of THz Inter-Satellite ISAC Under Hardware Impairments"
-
-Author: THz ISL ISAC Simulation Team
-Date: 2024
+Fixed issues:
+1. Removed 1/2 factor for complex baseband channel
+2. Ensured all units are in SI (m, m/s, Hz)
+3. Added hardware component visualization
 """
 
 import numpy as np
@@ -49,8 +46,7 @@ colors = sns.color_palette("colorblind", 4)
 def awgn_capacity(snr_linear: np.ndarray) -> np.ndarray:
     """
     Calculate classical Shannon capacity for AWGN channel.
-    
-    Implements Eq. (47): C_AWGN = log₂(1 + ρ)
+    For complex baseband: C_AWGN = log₂(1 + ρ)
     
     Args:
         snr_linear: Linear SNR values (ρ = P|g|²|B|²/N₀)
@@ -63,42 +59,32 @@ def awgn_capacity(snr_linear: np.ndarray) -> np.ndarray:
 def hardware_limited_capacity(
     snr_linear: np.ndarray,
     gamma_eff: float,
-    sigma_phi_sq: float = None,
-    hardware_profile: str = None
+    sigma_phi_sq: float
 ) -> np.ndarray:
     """
     Calculate hardware-limited channel capacity.
     
-    Implements Eq. (46): C ≤ (1/2) log₂(1 + (ρ·e^(-σ_φ²))/(1 + ρ·Γ_eff))
+    For complex baseband channel:
+    C = log₂(1 + (ρ·e^(-σ_φ²))/(1 + ρ·Γ_eff))
     
-    As ρ → ∞, this saturates at: C_sat = (1/2) log₂(1 + e^(-σ_φ²)/Γ_eff)
+    NO 1/2 factor for complex channel!
     
     Args:
         snr_linear: Linear SNR values (ρ = P|g|²|B|²/N₀)
         gamma_eff: Hardware quality factor
-        sigma_phi_sq: Phase noise variance [rad²], if None uses profile default
-        hardware_profile: Name of hardware profile (for getting phase noise)
+        sigma_phi_sq: Phase noise variance [rad²]
         
     Returns:
         Capacity in bits/symbol
     """
-    # Get phase noise variance if not provided
-    if sigma_phi_sq is None:
-        if hardware_profile is not None:
-            profile = HARDWARE_PROFILES[hardware_profile]
-            sigma_phi_sq = profile.phase_noise_variance
-        else:
-            # Default assumption if not specified
-            sigma_phi_sq = 0.042  # ~100 kHz linewidth, 100 μs frame
-    
     # Phase noise degradation factor
     phase_factor = np.exp(-sigma_phi_sq)
     
     # Hardware-limited SINR
     sinr_eff = (snr_linear * phase_factor) / (1 + snr_linear * gamma_eff)
     
-    # Factor of 1/2 accounts for complex-valued channel
-    capacity = 0.5 * np.log2(1 + sinr_eff)
+    # Complex baseband capacity (no 1/2 factor)
+    capacity = np.log2(1 + sinr_eff)
     
     return capacity
 
@@ -106,7 +92,7 @@ def calculate_capacity_ceiling(gamma_eff: float, sigma_phi_sq: float) -> float:
     """
     Calculate the asymptotic capacity ceiling.
     
-    C_sat = (1/2) log₂(1 + e^(-σ_φ²)/Γ_eff)
+    C_sat = log₂(1 + e^(-σ_φ²)/Γ_eff)
     
     Args:
         gamma_eff: Hardware quality factor
@@ -116,7 +102,7 @@ def calculate_capacity_ceiling(gamma_eff: float, sigma_phi_sq: float) -> float:
         Capacity ceiling in bits/symbol
     """
     phase_factor = np.exp(-sigma_phi_sq)
-    return 0.5 * np.log2(1 + phase_factor / gamma_eff)
+    return np.log2(1 + phase_factor / gamma_eff)
 
 def simulate_capacity_vs_snr():
     """
@@ -127,22 +113,6 @@ def simulate_capacity_vs_snr():
     # SNR range (extended to show saturation clearly)
     snr_dB = np.linspace(-10, 50, 200)
     snr_linear = 10 ** (snr_dB / 10)
-    
-    # Hardware profiles with adjusted Gamma_eff values
-    profiles = {
-        "High_Performance": {
-            "gamma_eff": 0.01,
-            "label": "High Performance\n(Γ_eff = 0.01)",
-            "color": colors[1],
-            "linestyle": '-'
-        },
-        "SWaP_Efficient": {
-            "gamma_eff": 0.045,  # As specified in the prompt
-            "label": "SWaP Efficient\n(Γ_eff = 0.045)",
-            "color": colors[2], 
-            "linestyle": '--'
-        }
-    }
     
     # Calculate capacities
     capacity_awgn = awgn_capacity(snr_linear)
@@ -155,37 +125,36 @@ def simulate_capacity_vs_snr():
             color=colors[0], linewidth=3, linestyle=':',
             label='Ideal AWGN', alpha=0.8)
     
-    # Plot hardware-limited cases
-    for profile_name, params in profiles.items():
-        # Get phase noise from actual profile if available
-        if profile_name in HARDWARE_PROFILES:
-            sigma_phi_sq = HARDWARE_PROFILES[profile_name].phase_noise_variance
-        else:
-            sigma_phi_sq = 0.042  # Default
+    # Plot hardware-limited cases using configuration values
+    profile_colors = [colors[1], colors[2]]
+    profile_styles = ['-', '--']
+    
+    for i, (name, profile) in enumerate(HARDWARE_PROFILES.items()):
+        # Use values from configuration
+        gamma_eff = profile.Gamma_eff
+        sigma_phi_sq = profile.phase_noise_variance
         
-        capacity_hw = hardware_limited_capacity(
-            snr_linear, 
-            params["gamma_eff"],
-            sigma_phi_sq
-        )
+        # Calculate capacity
+        capacity_hw = hardware_limited_capacity(snr_linear, gamma_eff, sigma_phi_sq)
         
-        # Calculate ceiling for annotation
-        ceiling = calculate_capacity_ceiling(params["gamma_eff"], sigma_phi_sq)
+        # Calculate ceiling
+        ceiling = calculate_capacity_ceiling(gamma_eff, sigma_phi_sq)
         
+        # Plot capacity curve
         ax.plot(snr_dB, capacity_hw,
-                color=params["color"], linewidth=2.5,
-                linestyle=params["linestyle"],
-                label=params["label"])
+                color=profile_colors[i], linewidth=2.5,
+                linestyle=profile_styles[i],
+                label=f'{name.replace("_", " ")}\n(Γ_eff = {gamma_eff})')
         
         # Add ceiling line
-        ax.axhline(y=ceiling, color=params["color"], 
+        ax.axhline(y=ceiling, color=profile_colors[i], 
                    linestyle=':', alpha=0.5, linewidth=1.5)
         
         # Add ceiling annotation
         ax.annotate(f'Ceiling: {ceiling:.2f} bits/symbol',
                     xy=(45, ceiling), xytext=(35, ceiling + 0.5),
-                    arrowprops=dict(arrowstyle='->', color=params["color"], alpha=0.7),
-                    fontsize=10, color=params["color"])
+                    arrowprops=dict(arrowstyle='->', color=profile_colors[i], alpha=0.7),
+                    fontsize=10, color=profile_colors[i])
     
     # Formatting
     ax.set_xlabel('Nominal SNR ρ [dB]', fontsize=14)
@@ -196,7 +165,7 @@ def simulate_capacity_vs_snr():
     # Grid and limits
     ax.grid(True, which='both', alpha=0.3)
     ax.set_xlim(-10, 50)
-    ax.set_ylim(0, 8)
+    ax.set_ylim(0, 12)
     
     # Legend
     ax.legend(loc='lower right', frameon=True, fancybox=True, 
@@ -207,7 +176,8 @@ def simulate_capacity_vs_snr():
         'Key Insight:\n'
         '• AWGN capacity grows unbounded with power\n'
         '• Hardware impairments create capacity ceilings\n'
-        '• Higher Γ_eff → Lower ceiling'
+        '• Higher Γ_eff → Lower ceiling\n'
+        f'• Phase noise: σ_φ² ≈ 0.042 rad² (both profiles)'
     )
     props = dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.8)
     ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=10,
@@ -215,7 +185,7 @@ def simulate_capacity_vs_snr():
     
     # Add shaded regions to highlight saturation
     ax.axvspan(30, 50, alpha=0.1, color='gray', label='_nolegend_')
-    ax.text(40, 0.5, 'Hardware-limited\nregime', ha='center', fontsize=10,
+    ax.text(40, 1.0, 'Hardware-limited\nregime', ha='center', fontsize=10,
             style='italic', alpha=0.7)
     
     # Save figure
@@ -226,101 +196,119 @@ def simulate_capacity_vs_snr():
     
     # Print numerical results
     print("\n=== Capacity Ceiling Analysis ===")
-    for profile_name, params in profiles.items():
-        if profile_name in HARDWARE_PROFILES:
-            sigma_phi_sq = HARDWARE_PROFILES[profile_name].phase_noise_variance
-        else:
-            sigma_phi_sq = 0.042
-            
-        ceiling = calculate_capacity_ceiling(params["gamma_eff"], sigma_phi_sq)
+    for name, profile in HARDWARE_PROFILES.items():
+        gamma_eff = profile.Gamma_eff
+        sigma_phi_sq = profile.phase_noise_variance
         
-        # Calculate SNR where capacity reaches 95% of ceiling
+        ceiling = calculate_capacity_ceiling(gamma_eff, sigma_phi_sq)
+        
+        # Calculate capacity at 30 dB
         cap_at_30dB = hardware_limited_capacity(
-            np.array([1000]), params["gamma_eff"], sigma_phi_sq
+            np.array([1000]), gamma_eff, sigma_phi_sq
         )[0]
-        saturation_pct = (cap_at_30dB / ceiling) * 100
         
-        print(f"\n{params['label'].replace(chr(10), ' ')}:")
-        print(f"  Gamma_eff: {params['gamma_eff']:.3f}")
+        # Check for valid ceiling before division
+        if ceiling > 0:
+            saturation_pct = (cap_at_30dB / ceiling) * 100
+        else:
+            saturation_pct = 0
+        
+        print(f"\n{name.replace('_', ' ')}:")
+        print(f"  Gamma_eff: {gamma_eff:.3f}")
         print(f"  Phase noise variance: {sigma_phi_sq:.4f} rad²")
         print(f"  Capacity ceiling: {ceiling:.3f} bits/symbol")
         print(f"  At 30 dB SNR: {cap_at_30dB:.3f} bits/symbol ({saturation_pct:.1f}% of ceiling)")
         print(f"  Equivalent to: {2**ceiling:.1f}-QAM maximum constellation")
 
-def plot_capacity_components():
+def plot_hardware_components():
     """
-    Additional plot showing the breakdown of capacity limitations.
+    Generate pie charts showing the anatomy of hardware impairment floor.
+    As suggested in the review.
     """
-    print("\n=== Generating Capacity Components Plot ===")
+    print("\n=== Generating Hardware Components Plot ===")
     
-    # Fixed parameters
-    gamma_eff = 0.045  # SWaP Efficient
-    sigma_phi_sq = 0.042
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    fig.suptitle('Anatomy of the Hardware Impairment Floor (Γ_eff)', fontsize=16, pad=20)
     
-    # SNR range
-    snr_dB = np.linspace(-10, 40, 100)
-    snr_linear = 10 ** (snr_dB / 10)
+    # Custom colors for components
+    component_colors = ['#ff7f0e', '#2ca02c', '#d62728']  # Orange, Green, Red
     
-    # Calculate different scenarios
-    # 1. Ideal AWGN
-    cap_awgn = awgn_capacity(snr_linear)
+    for ax, (name, profile) in zip(axes, HARDWARE_PROFILES.items()):
+        # Get component values
+        components = {
+            'PA': profile.Gamma_PA,
+            'LO': profile.Gamma_LO,
+            'ADC': profile.Gamma_ADC
+        }
+        
+        # Calculate percentages
+        total = sum(components.values())
+        percentages = {k: v/total*100 for k, v in components.items()}
+        
+        # Create pie chart
+        wedges, texts, autotexts = ax.pie(
+            components.values(), 
+            labels=[f'{k}\n({v:.1e})' for k, v in components.items()],
+            autopct=lambda pct: f'{pct:.1f}%' if pct > 1 else f'{pct:.2f}%',
+            startangle=90,
+            colors=component_colors,
+            wedgeprops={'edgecolor': 'white', 'linewidth': 2}
+        )
+        
+        # Enhance text
+        for text in texts:
+            text.set_fontsize(11)
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontsize(10)
+            autotext.set_weight('bold')
+        
+        # Add title and total
+        ax.set_title(f'{name.replace("_", " ")}\nΓ_eff = {profile.Gamma_eff:.3f}', 
+                    fontsize=12, pad=10)
+        
+        # Add text showing PA dominance
+        if percentages['PA'] > 90:
+            ax.text(0, -1.3, f"PA dominates: {percentages['PA']:.1f}%", 
+                   ha='center', transform=ax.transAxes, 
+                   fontsize=10, style='italic', color=component_colors[0])
     
-    # 2. With PA distortion only (no phase noise)
-    cap_pa_only = hardware_limited_capacity(snr_linear, gamma_eff, 0)
-    
-    # 3. With phase noise only (no PA distortion)
-    phase_factor = np.exp(-sigma_phi_sq)
-    cap_pn_only = 0.5 * np.log2(1 + snr_linear * phase_factor)
-    
-    # 4. With both impairments
-    cap_both = hardware_limited_capacity(snr_linear, gamma_eff, sigma_phi_sq)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 7))
-    
-    # Plot all curves
-    ax.plot(snr_dB, cap_awgn, 'k:', linewidth=3, label='Ideal AWGN', alpha=0.8)
-    ax.plot(snr_dB, cap_pn_only, 'b--', linewidth=2, label='Phase noise only', alpha=0.7)
-    ax.plot(snr_dB, cap_pa_only, 'r--', linewidth=2, label='PA distortion only', alpha=0.7)
-    ax.plot(snr_dB, cap_both, 'g-', linewidth=3, label='Both impairments')
-    
-    # Fill areas to show loss
-    ax.fill_between(snr_dB, cap_pn_only, cap_awgn, alpha=0.2, color='blue', 
-                    label='Loss from phase noise')
-    ax.fill_between(snr_dB, cap_both, cap_pn_only, alpha=0.2, color='red',
-                    label='Additional loss from PA')
-    
-    # Formatting
-    ax.set_xlabel('Nominal SNR [dB]', fontsize=14)
-    ax.set_ylabel('Capacity [bits/symbol]', fontsize=14)
-    ax.set_title('Impact of Individual Hardware Impairments on Capacity\n(SWaP Efficient Profile)',
-                 fontsize=16, pad=15)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right', fontsize=10)
-    ax.set_xlim(-10, 40)
-    ax.set_ylim(0, 6)
-    
-    # Save figure
     plt.tight_layout()
-    plt.savefig('capacity_components.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig('capacity_components.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig('hardware_components.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig('hardware_components.png', format='png', dpi=300, bbox_inches='tight')
     plt.show()
+    
+    # Print component analysis
+    print("\nComponent Analysis:")
+    for name, profile in HARDWARE_PROFILES.items():
+        print(f"\n{name}:")
+        total = profile.Gamma_PA + profile.Gamma_LO + profile.Gamma_ADC
+        print(f"  PA contribution: {profile.Gamma_PA/total*100:.1f}%")
+        print(f"  LO contribution: {profile.Gamma_LO/total*100:.3f}%")
+        print(f"  ADC contribution: {profile.Gamma_ADC/total*100:.2f}%")
 
 def main():
     """Main function to run capacity simulations."""
     print("=== THz ISL ISAC Capacity Simulation ===")
     print(f"Analyzing hardware-limited capacity ceiling effect")
     
+    # Verify phase noise calculation
+    for name, profile in HARDWARE_PROFILES.items():
+        print(f"\n{name} phase noise check:")
+        print(f"  Δν = {profile.components.LO_linewidth_Hz/1e3:.0f} kHz")
+        print(f"  T = {profile.frame_duration_s*1e6:.0f} μs")
+        print(f"  σ_φ² = {profile.phase_noise_variance:.4f} rad²")
+    
     # Generate main capacity plot
     simulate_capacity_vs_snr()
     
-    # Generate component breakdown plot
-    plot_capacity_components()
+    # Generate hardware component breakdown
+    plot_hardware_components()
     
     print("\n=== Simulation Complete ===")
     print("Output files:")
     print("  - capacity_vs_snr.pdf/png")
-    print("  - capacity_components.pdf/png")
+    print("  - hardware_components.pdf/png")
 
 if __name__ == "__main__":
     main()

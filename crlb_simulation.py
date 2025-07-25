@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """
-crlb_simulation.py
+crlb_simulation.py - FINAL FIXED VERSION
 
-Simulation of sensing performance (CRLB) for THz LEO-ISL ISAC systems.
-Implements the Bayesian Cramér-Rao Lower Bound formulas from the manuscript
-and generates visualization plots.
-
-Based on "Fundamental Limits of THz Inter-Satellite ISAC Under Hardware Impairments"
-
-Author: THz ISL ISAC Simulation Team
-Date: 2024
+Fixed issues:
+1. Ensured all calculations use SI units (m, m/s, Hz)
+2. Using correct phase noise variance from config
+3. Proper unit conversions where needed
 """
 
 import numpy as np
@@ -54,8 +50,8 @@ def calculate_channel_gain(distance_m: float, frequency_Hz: float,
     Calculate channel gain using Friis equation.
     
     Args:
-        distance_m: ISL distance in meters
-        frequency_Hz: Carrier frequency in Hz
+        distance_m: ISL distance in meters (SI unit)
+        frequency_Hz: Carrier frequency in Hz (SI unit)
         antenna_gain_linear: Combined antenna gain (G_tx * G_rx), if None uses scenario default
         
     Returns:
@@ -143,7 +139,7 @@ def calculate_position_bcrlb(
     BCRLB_position = (c²/(8π²f_c²)) * (σ_eff²/(M|g|²|B|²)) * e^(σ_φ²)
     
     Args:
-        f_c: Carrier frequency [Hz]
+        f_c: Carrier frequency [Hz] (SI unit)
         sigma_eff_sq: Effective noise variance
         M: Number of pilot symbols
         channel_gain: Channel gain magnitude |g|
@@ -151,7 +147,7 @@ def calculate_position_bcrlb(
         sigma_phi_sq: Phase noise variance [rad²]
         
     Returns:
-        Position BCRLB [m²]
+        Position BCRLB [m²] (SI unit)
     """
     # First term: fundamental ranging resolution
     term1 = PhysicalConstants.c ** 2 / (8 * np.pi**2 * f_c**2)
@@ -175,7 +171,7 @@ def simulate_ranging_crlb_vs_snr():
     
     # Simulation parameters
     frequencies_GHz = [100, 300, 600]  # GHz
-    frequencies_Hz = [f * 1e9 for f in frequencies_GHz]
+    frequencies_Hz = [f * 1e9 for f in frequencies_GHz]  # Convert to Hz (SI unit)
     hardware_profile = "SWaP_Efficient"  # Use standard profile for this plot
     
     # Get profile parameters
@@ -191,6 +187,7 @@ def simulate_ranging_crlb_vs_snr():
         
         for f_GHz, f_Hz in zip(frequencies_GHz, frequencies_Hz):
             # Calculate channel gain at this frequency
+            # Using SI units: distance in meters
             g = calculate_channel_gain(scenario.R_default, f_Hz)
             
             # Calculate effective noise
@@ -267,7 +264,7 @@ def simulate_ranging_crlb_vs_hardware():
     snr_dB = 30  # High SNR to see hardware limitations
     snr_linear = 10 ** (snr_dB / 10)
     f_c_GHz = 300
-    f_c_Hz = f_c_GHz * 1e9
+    f_c_Hz = f_c_GHz * 1e9  # Convert to Hz (SI unit)
     
     # Calculate for both hardware profiles
     profiles = ["High_Performance", "SWaP_Efficient"]
@@ -278,6 +275,7 @@ def simulate_ranging_crlb_vs_hardware():
         profile = HARDWARE_PROFILES[profile_name]
         
         # Calculate channel parameters
+        # Using SI units: distance in meters
         g = calculate_channel_gain(scenario.R_default, f_c_Hz)
         B = calculate_bussgang_gain()
         
@@ -379,16 +377,23 @@ def simulate_ranging_crlb_vs_hardware():
         print(f"\n{profile_name}:")
         print(f"  Ranging RMSE: {rmse*1000:.3f} mm ({rmse:.3e} m)")
         print(f"  Gamma_eff: {comp['Gamma_eff']:.4f}")
+        print(f"  Phase noise variance: {comp['Phase_noise_var']:.4f} rad²")
         print(f"  Component breakdown:")
         print(f"    - PA:  {comp['Gamma_PA']:.2e} ({comp['Gamma_PA']/comp['Gamma_eff']*100:.1f}%)")
         print(f"    - LO:  {comp['Gamma_LO']:.2e} ({comp['Gamma_LO']/comp['Gamma_eff']*100:.1f}%)")
-        print(f"    - ADC: {comp['Gamma_ADC']:.2e} ({comp['Gamma_ADC']/comp['Gamma_eff']*100:.1f}%)")
+        print(f"    - ADC: {comp['Gamma_ADC']:.2e} ({comp['Gamma_ADC']/comp['Gamma_eff']*100:.2f}%)")
 
 def main():
     """Main function to run all simulations."""
     print("=== THz ISL ISAC CRLB Simulation ===")
     print(f"Configuration: {simulation.n_pilots} pilots, {scenario.R_default/1e3:.0f} km distance")
     print(f"Hardware profiles: {list(HARDWARE_PROFILES.keys())}")
+    
+    # Verify units
+    print("\nUnit Check:")
+    print(f"  Distance: {scenario.R_default} m (SI unit)")
+    print(f"  Velocity: {scenario.v_rel_default} m/s (SI unit)")
+    print(f"  Speed of light: {PhysicalConstants.c} m/s (SI unit)")
     
     # Run simulations
     simulate_ranging_crlb_vs_snr()
