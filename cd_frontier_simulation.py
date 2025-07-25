@@ -194,7 +194,7 @@ class ISACSystem:
         J_B = self.calculate_bfim_observable(avg_power, P_tx_scale)
         
         self._debug_count += 1
-        if DEBUG_VERBOSE and self._debug_count % 50 == 0:
+        if DEBUG_VERBOSE and self._debug_count % 200 == 0:
             print(f"\n[Debug #{self._debug_count}]")
             print(f"  avg_power = {avg_power:.6f}")
             print(f"  J_B condition = {np.linalg.cond(J_B):.2e}")
