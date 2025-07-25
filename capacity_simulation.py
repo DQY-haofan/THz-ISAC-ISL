@@ -244,7 +244,7 @@ def plot_hardware_components():
         }
         
         # Calculate percentages
-        total = sum(components.values())
+        actual_total  = sum(components.values())
         percentages = {k: v/actual_total*100 for k, v in components.items()}
         
         # Create pie chart
