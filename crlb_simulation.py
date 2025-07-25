@@ -157,20 +157,22 @@ def calculate_position_bcrlb(
     return bcrlb_position
 
 def simulate_ranging_crlb_vs_snr():
-    """
-    Generate Figure 1: Ranging CRLB vs. SNR for different carrier frequencies.
-    Shows the f_c² scaling and hardware-imposed performance floor.
-    """
+    """Generate Figure 1: Ranging CRLB vs. SNR for different carrier frequencies."""
     print("Generating Figure 1: Ranging CRLB vs. SNR...")
     
     # Simulation parameters
     frequencies_GHz = [100, 300, 600]  # GHz
-    frequencies_Hz = [f * 1e9 for f in frequencies_GHz]  # Convert to Hz (SI unit)
-    hardware_profile = "SWaP_Efficient"  # Use standard profile for this plot
+    frequencies_Hz = [f * 1e9 for f in frequencies_GHz]  # Convert to Hz
+    hardware_profile = "SWaP_Efficient"
     
     # Get profile parameters
     profile = HARDWARE_PROFILES[hardware_profile]
     B = calculate_bussgang_gain()
+    
+    # 添加调试输出
+    print(f"Using hardware profile: {hardware_profile}")
+    print(f"Gamma_eff = {profile.Gamma_eff}")
+    print(f"Frequencies to plot: {frequencies_GHz} GHz")
     
     # Initialize results storage
     results = {f: [] for f in frequencies_GHz}
@@ -181,13 +183,19 @@ def simulate_ranging_crlb_vs_snr():
         
         for f_GHz, f_Hz in zip(frequencies_GHz, frequencies_Hz):
             # Calculate channel gain at this frequency
-            # Using SI units: distance in meters
             g = calculate_channel_gain(scenario.R_default, f_Hz)
             
             # Calculate effective noise
-            sigma_eff_sq, _ = calculate_effective_noise_variance(
+            sigma_eff_sq, N_0 = calculate_effective_noise_variance(
                 snr_linear, g, hardware_profile
             )
+            
+            # 添加调试输出（只在第一个SNR点）
+            if snr_dB == simulation.SNR_dB_array[0]:
+                print(f"\nAt {f_GHz} GHz, SNR={snr_dB} dB:")
+                print(f"  Channel gain g = {g:.2e}")
+                print(f"  N_0 = {N_0:.2e}")
+                print(f"  sigma_eff_sq = {sigma_eff_sq:.2e}")
             
             # Calculate position BCRLB
             bcrlb_pos = calculate_position_bcrlb(
@@ -195,81 +203,36 @@ def simulate_ranging_crlb_vs_snr():
                 g, B, profile.phase_noise_variance
             )
             
-            # Convert to ranging RMSE (square root for standard deviation)
+            # Convert to ranging RMSE
             ranging_rmse_m = np.sqrt(bcrlb_pos)
             
             results[f_GHz].append(ranging_rmse_m)
     
-    # Create plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
-    for i, (f_GHz, ranging_rmse) in enumerate(results.items()):
-        ax.semilogy(simulation.SNR_dB_array, ranging_rmse, 
-                   color=colors[i], linewidth=2.5,
-                   label=f'{f_GHz} GHz', marker='o', markevery=5,
-                   markersize=8, markerfacecolor='white', markeredgewidth=2)
-    
-    # Add theoretical f_c² scaling reference lines
-    ref_snr = 20  # Reference SNR for scaling demonstration
-    ref_idx = np.argmin(np.abs(simulation.SNR_dB_array - ref_snr))
-    for i, f_GHz in enumerate(frequencies_GHz):
-        if i > 0:
-            # Show f_c² improvement from 100 GHz baseline
-            scaling = (frequencies_GHz[0] / f_GHz) ** 2
-            ref_value = results[frequencies_GHz[0]][ref_idx] * scaling
-            ax.plot([ref_snr-5, ref_snr+5], [ref_value, ref_value],
-                   '--', color=colors[i], alpha=0.5, linewidth=1.5)
-    
-    # Formatting
-    ax.set_xlabel('SNR [dB]', fontsize=12)
-    ax.set_ylabel('Ranging RMSE [m]', fontsize=12)
-    ax.set_title('THz ISL Ranging Performance vs. SNR\n' + 
-                f'(Hardware: {hardware_profile}, Distance: {scenario.R_default/1e3:.0f} km)',
-                fontsize=14, pad=10)
-    ax.grid(True, which='both', alpha=0.3)
-    ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
-    
-    # Set axis limits to show performance floor
-    ax.set_xlim(simulation.SNR_dB_min, simulation.SNR_dB_max)
-    ax.set_ylim(1e-4, 1e2)
-    
-    # Add annotation for hardware floor
-    ax.annotate('Hardware-limited\nperformance floor', 
-                xy=(35, results[600][-1]), xytext=(25, 5e-3),
-                arrowprops=dict(arrowstyle='->', color='black', alpha=0.7),
-                fontsize=10, ha='center')
-    
-    # Save figure
-    plt.tight_layout()
-    plt.savefig('ranging_crlb_vs_snr.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig('ranging_crlb_vs_snr.png', format='png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    print(f"Figure 1 saved. Performance floor at high SNR: ~{results[600][-1]:.2e} m")
+    # 调试：打印结果长度
+    for f_GHz in frequencies_GHz:
+        print(f"\nResults for {f_GHz} GHz: {len(results[f_GHz])} points")
+        print(f"  First value: {results[f_GHz][0]:.2e} m")
+        print(f"  Last value: {results[f_GHz][-1]:.2e} m")
+
 
 def simulate_ranging_crlb_vs_hardware():
-    """
-    Generate Figure 2: Ranging CRLB vs. Hardware Profile at fixed high SNR.
-    Shows the impact of hardware quality on best-case sensing accuracy.
-    """
+    """Generate Figure 2: Ranging CRLB vs. Hardware Profile at fixed high SNR."""
     print("\nGenerating Figure 2: Ranging CRLB vs. Hardware Profile...")
     
     # Fixed parameters
-    snr_dB = 30  # High SNR to see hardware limitations
+    snr_dB = 30
     snr_linear = 10 ** (snr_dB / 10)
     f_c_GHz = 300
-    f_c_Hz = f_c_GHz * 1e9  # Convert to Hz (SI unit)
+    f_c_Hz = f_c_GHz * 1e9
     
     # Calculate for both hardware profiles
     profiles = ["High_Performance", "SWaP_Efficient"]
     ranging_rmse_results = []
-    component_contributions = []
     
     for profile_name in profiles:
         profile = HARDWARE_PROFILES[profile_name]
         
         # Calculate channel parameters
-        # Using SI units: distance in meters
         g = calculate_channel_gain(scenario.R_default, f_c_Hz)
         B = calculate_bussgang_gain()
         
@@ -277,6 +240,13 @@ def simulate_ranging_crlb_vs_hardware():
         sigma_eff_sq, N_0 = calculate_effective_noise_variance(
             snr_linear, g, profile_name
         )
+        
+        # 添加详细调试输出
+        print(f"\n{profile_name}:")
+        print(f"  Gamma_eff = {profile.Gamma_eff}")
+        print(f"  sigma_eff_sq = {sigma_eff_sq:.2e}")
+        print(f"  N_0 = {N_0:.2e}")
+        print(f"  Hardware noise = {sigma_eff_sq - N_0:.2e}")
         
         # Calculate position BCRLB
         bcrlb_pos = calculate_position_bcrlb(
@@ -287,96 +257,10 @@ def simulate_ranging_crlb_vs_hardware():
         ranging_rmse_m = np.sqrt(bcrlb_pos)
         ranging_rmse_results.append(ranging_rmse_m)
         
-        # Store component contributions for detailed analysis
-        component_contributions.append({
-            'Gamma_PA': profile.Gamma_PA,
-            'Gamma_LO': profile.Gamma_LO,
-            'Gamma_ADC': profile.Gamma_ADC,
-            'Gamma_eff': profile.Gamma_eff,
-            'Phase_noise_var': profile.phase_noise_variance,
-            'Thermal_noise': N_0,
-            'Effective_noise': sigma_eff_sq
-        })
-    
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    # Subplot 1: Ranging RMSE comparison
-    x_pos = np.arange(len(profiles))
-    bars1 = ax1.bar(x_pos, np.array(ranging_rmse_results) * 1000,  # Convert to mm
-                     color=[colors[0], colors[2]], alpha=0.8, edgecolor='black')
-    
-    # Add value labels on bars
-    for i, (bar, val) in enumerate(zip(bars1, ranging_rmse_results)):
-        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
-                f'{val*1000:.2f} mm', ha='center', va='bottom', fontsize=10)
-    
-    ax1.set_ylabel('Ranging RMSE [mm]', fontsize=12)
-    ax1.set_title(f'Ranging Performance at {snr_dB} dB SNR\n({f_c_GHz} GHz, {scenario.R_default/1e3:.0f} km)',
-                  fontsize=14, pad=10)
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(profiles, fontsize=11)
-    ax1.grid(True, axis='y', alpha=0.3)
-    ax1.set_ylim(0, max(ranging_rmse_results) * 1200)
-    
-    # Add improvement factor annotation
-    improvement = ranging_rmse_results[1] / ranging_rmse_results[0]
-    ax1.annotate(f'{improvement:.1f}x worse', 
-                xy=(0.5, max(ranging_rmse_results) * 600), 
-                fontsize=12, ha='center',
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.5))
-    
-    # Subplot 2: Hardware quality factor breakdown
-    width = 0.35
-    x_pos2 = np.arange(len(profiles))
-    
-    # Stack the component contributions
-    gamma_pa = [comp['Gamma_PA'] for comp in component_contributions]
-    gamma_lo = [comp['Gamma_LO'] for comp in component_contributions]
-    gamma_adc = [comp['Gamma_ADC'] for comp in component_contributions]
-    
-    # Convert to percentage of total
-    gamma_total = [comp['Gamma_eff'] for comp in component_contributions]
-    pa_pct = [pa/tot * 100 for pa, tot in zip(gamma_pa, gamma_total)]
-    lo_pct = [lo/tot * 100 for lo, tot in zip(gamma_lo, gamma_total)]
-    adc_pct = [adc/tot * 100 for adc, tot in zip(gamma_adc, gamma_total)]
-    
-    # Create stacked bar chart
-    p1 = ax2.bar(x_pos2, pa_pct, width, label='PA', color=colors[1], alpha=0.8)
-    p2 = ax2.bar(x_pos2, lo_pct, width, bottom=pa_pct, label='LO', color=colors[3], alpha=0.8)
-    p3 = ax2.bar(x_pos2, adc_pct, width, bottom=np.array(pa_pct)+np.array(lo_pct), 
-                 label='ADC', color=colors[4], alpha=0.8)
-    
-    # Add total Gamma_eff values as text
-    for i, (x, gamma) in enumerate(zip(x_pos2, gamma_total)):
-        ax2.text(x, 105, f'Γ_eff = {gamma:.3f}', ha='center', va='bottom', fontsize=10)
-    
-    ax2.set_ylabel('Component Contribution [%]', fontsize=12)
-    ax2.set_title('Hardware Quality Factor Breakdown', fontsize=14, pad=10)
-    ax2.set_xticks(x_pos2)
-    ax2.set_xticklabels(profiles, fontsize=11)
-    ax2.legend(loc='upper right')
-    ax2.grid(True, axis='y', alpha=0.3)
-    ax2.set_ylim(0, 115)
-    
-    # Save figure
-    plt.tight_layout()
-    plt.savefig('ranging_crlb_vs_hardware.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig('ranging_crlb_vs_hardware.png', format='png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    # Print detailed results
-    print(f"\nDetailed Results at {snr_dB} dB SNR:")
-    for i, (profile_name, rmse, comp) in enumerate(zip(profiles, ranging_rmse_results, component_contributions)):
-        print(f"\n{profile_name}:")
-        print(f"  Ranging RMSE: {rmse*1000:.3f} mm ({rmse:.3e} m)")
-        print(f"  Gamma_eff: {comp['Gamma_eff']:.4f}")
-        print(f"  Phase noise variance: {comp['Phase_noise_var']:.4f} rad²")
-        print(f"  Component breakdown:")
-        print(f"    - PA:  {comp['Gamma_PA']:.2e} ({comp['Gamma_PA']/comp['Gamma_eff']*100:.1f}%)")
-        print(f"    - LO:  {comp['Gamma_LO']:.2e} ({comp['Gamma_LO']/comp['Gamma_eff']*100:.1f}%)")
-        print(f"    - ADC: {comp['Gamma_ADC']:.2e} ({comp['Gamma_ADC']/comp['Gamma_eff']*100:.2f}%)")
+        print(f"  BCRLB = {bcrlb_pos:.2e} m²")
+        print(f"  Ranging RMSE = {ranging_rmse_m:.2e} m")
 
+        
 def main():
     """Main function to run all simulations."""
     print("=== THz ISL ISAC CRLB Simulation ===")
