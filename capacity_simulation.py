@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-capacity_simulation.py - FINAL FIXED VERSION
+capacity_simulation.py - FIXED VERSION (removed pad parameter error)
 
 Fixed issues:
 1. Removed 1/2 factor for complex baseband channel
 2. Ensured all units are in SI (m, m/s, Hz)
 3. Added hardware component visualization
+4. Fixed matplotlib suptitle pad error
 """
 
 import numpy as np
@@ -177,7 +178,7 @@ def simulate_capacity_vs_snr():
         '• AWGN capacity grows unbounded with power\n'
         '• Hardware impairments create capacity ceilings\n'
         '• Higher Γ_eff → Lower ceiling\n'
-        f'• Phase noise: σ_φ² ≈ 0.042 rad² (both profiles)'
+        f'• Phase noise: σ_φ² ≈ {profile.phase_noise_variance:.3f} rad²'
     )
     props = dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.8)
     ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=10,
@@ -218,7 +219,7 @@ def simulate_capacity_vs_snr():
         print(f"  Phase noise variance: {sigma_phi_sq:.4f} rad²")
         print(f"  Capacity ceiling: {ceiling:.3f} bits/symbol")
         print(f"  At 30 dB SNR: {cap_at_30dB:.3f} bits/symbol ({saturation_pct:.1f}% of ceiling)")
-        print(f"  Equivalent to: {2**ceiling:.1f}-QAM maximum constellation")
+        print(f"  Equivalent to: {2**(2*ceiling):.1f}-QAM maximum constellation")
 
 def plot_hardware_components():
     """
@@ -228,7 +229,8 @@ def plot_hardware_components():
     print("\n=== Generating Hardware Components Plot ===")
     
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    fig.suptitle('Anatomy of the Hardware Impairment Floor (Γ_eff)', fontsize=16, pad=20)
+    # Fixed: Removed pad parameter which isn't supported by suptitle
+    fig.suptitle('Anatomy of the Hardware Impairment Floor (Γ_eff)', fontsize=16, y=0.98)
     
     # Custom colors for components
     component_colors = ['#ff7f0e', '#2ca02c', '#d62728']  # Orange, Green, Red
@@ -296,7 +298,7 @@ def main():
     for name, profile in HARDWARE_PROFILES.items():
         print(f"\n{name} phase noise check:")
         print(f"  Δν = {profile.components.LO_linewidth_Hz/1e3:.0f} kHz")
-        print(f"  T = {profile.frame_duration_s*1e6:.0f} μs")
+        print(f"  T = {profile.frame_duration_s*1e6:.1f} μs")
         print(f"  σ_φ² = {profile.phase_noise_variance:.4f} rad²")
     
     # Generate main capacity plot

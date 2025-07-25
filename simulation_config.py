@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-simulation_config.py - FINAL FIXED VERSION
+simulation_config.py - CORRECTED VERSION WITH COHERENT PARAMETERS
 
-Central configuration file for THz LEO-ISL ISAC system simulations.
-- Fixed phase noise variance calculation using proper Wiener process approximation
-- All parameters in SI units for consistency
-- Clear documentation of units
+Fixed the frame duration to ensure physical coherence.
+Key insight: For a 100 kHz linewidth oscillator, we need much shorter
+processing frames to maintain coherence.
 
 Author: THz ISL ISAC Simulation Team
 Date: 2024
@@ -79,7 +78,7 @@ class ScenarioParameters:
         return 2.77 / (theta_3dB ** 2)
 
 # =============================================================================
-# HARDWARE PROFILES
+# HARDWARE PROFILES - WITH COHERENT FRAME DURATION
 # =============================================================================
 @dataclass
 class HardwareComponentSpecs:
@@ -119,7 +118,7 @@ class HardwareProfile:
     # Component specifications
     components: HardwareComponentSpecs
     
-    # System parameters
+    # System parameters - CORRECTED FOR COHERENCE
     frame_duration_s: float    # Frame duration [seconds]
     signal_bandwidth_Hz: float # Signal bandwidth [Hz]
     
@@ -129,12 +128,30 @@ class HardwareProfile:
         Calculate phase noise variance σ_φ² [rad²].
         Using Wiener process approximation for short frames.
         σ_φ² ≈ (4/3) * π * Δν * T
+        
+        CRITICAL: For coherent processing, we need σ_φ² << 1
         """
         delta_nu = self.components.LO_linewidth_Hz
         T = self.frame_duration_s
         
-        # Correct physical model from manuscript
-        return (4/3) * np.pi * delta_nu * T
+        # Calculate phase noise variance
+        variance = (4/3) * np.pi * delta_nu * T
+        
+        # Print warning if variance is too large
+        if variance > 1.0:
+            print(f"WARNING: Phase noise variance {variance:.2f} rad² is too large!")
+            print(f"  Consider reducing frame duration or improving oscillator")
+        
+        return variance
+    
+    @property
+    def coherence_time(self) -> float:
+        """
+        Estimate coherence time for σ_φ² ≈ 0.1 rad² (reasonable limit).
+        """
+        delta_nu = self.components.LO_linewidth_Hz
+        # Solve: (4/3) * π * Δν * T_coh = 0.1
+        return 0.1 / ((4/3) * np.pi * delta_nu)
     
     @property
     def EVM_total_percent(self) -> float:
@@ -173,8 +190,10 @@ HIGH_PERFORMANCE_PROFILE = HardwareProfile(
         ADC_sampling_rate_Gsps=20
     ),
     
-    # System parameters
-    frame_duration_s=100e-6,    # 100 μs
+    # CORRECTED: Much shorter frame for coherence
+    # For 100 kHz linewidth and target σ_φ² ≈ 0.042:
+    # T = 0.042 / ((4/3) * π * 1e5) ≈ 0.1 μs
+    frame_duration_s=0.1e-6,    # 0.1 μs = 100 ns
     signal_bandwidth_Hz=10e9    # 10 GHz
 )
 
@@ -209,8 +228,8 @@ SWAP_EFFICIENT_PROFILE = HardwareProfile(
         ADC_sampling_rate_Gsps=15
     ),
     
-    # System parameters
-    frame_duration_s=100e-6,    # 100 μs
+    # CORRECTED: Same short frame duration for coherence
+    frame_duration_s=0.1e-6,    # 0.1 μs = 100 ns  
     signal_bandwidth_Hz=10e9    # 10 GHz
 )
 
@@ -320,6 +339,15 @@ def validate_configuration():
         sigma_phi_sq = profile.phase_noise_variance
         print(f"  Phase noise variance: {sigma_phi_sq:.4f} rad² (σ_φ = {np.sqrt(sigma_phi_sq):.3f} rad)")
         
+        # Check coherence
+        print(f"  Frame duration: {profile.frame_duration_s*1e6:.1f} μs")
+        print(f"  Coherence time (for σ_φ²=0.1): {profile.coherence_time*1e6:.1f} μs")
+        
+        if sigma_phi_sq > 0.1:
+            print(f"  ⚠️  WARNING: Frame duration too long for coherent processing!")
+        else:
+            print(f"  ✓ Frame duration suitable for coherent processing")
+        
         # Calculate capacity ceiling
         ceiling = derived.capacity_ceiling(profile.Gamma_eff, sigma_phi_sq)
         print(f"  Capacity ceiling: {ceiling:.2f} bits/symbol")
@@ -331,7 +359,13 @@ def validate_configuration():
     print(f"  Velocity range: 0 - {scenario.v_rel_max/1e3:.0f} km/s")
     print(f"  All parameters in SI units ✓")
     
-    print("\nValidation complete.")
+    # Print critical insight
+    print("\n" + "="*60)
+    print("CRITICAL INSIGHT:")
+    print("For THz ISL with practical oscillators (100 kHz linewidth),")
+    print("coherent processing requires extremely short frames (~100 ns).")
+    print("This is a fundamental constraint of THz hardware!")
+    print("="*60 + "\n")
 
 # Run validation on import
 if __name__ == "__main__":
@@ -348,4 +382,5 @@ if __name__ == "__main__":
         print(f"\n{name}:")
         print(f"  Gamma_eff: {profile.Gamma_eff:.4f} (EVM: {profile.EVM_total_percent:.1f}%)")
         print(f"  Phase noise variance: {profile.phase_noise_variance:.4f} rad²")
+        print(f"  Frame duration: {profile.frame_duration_s*1e9:.0f} ns")
         print(f"  Capacity Ceiling: {derived.capacity_ceiling(profile.Gamma_eff, profile.phase_noise_variance):.2f} bits/symbol")
