@@ -93,30 +93,36 @@ def calculate_effective_noise_variance(
     """
     Calculate effective noise variance including hardware impairments.
     
-    修正：确保硬件噪声正确计入
+    修正版本：确保硬件差异和频率依赖性正确反映
     """
     profile = HARDWARE_PROFILES[hardware_profile]
     
-    # Calculate thermal noise from SNR definition
+    # Bussgang gain
     B = calculate_bussgang_gain()
-    N_0 = signal_power * (channel_gain ** 2) * (B ** 2) / SNR_linear
     
-    # 关键修正：使用完整的Gamma_eff而不仅仅是Gamma_PA
-    # 硬件引起的信号相关噪声功率
-    P_rx = signal_power * (channel_gain ** 2) * (B ** 2)  # 接收信号功率
-    sigma_hw_sq = P_rx * profile.Gamma_eff  # 使用总的Gamma_eff
+    # 接收信号功率（包含路径损耗）
+    P_rx = signal_power * (channel_gain ** 2) * (B ** 2)
     
-    # Phase noise effect (multiplicative factor)
+    # 热噪声功率（从SNR定义反推）
+    # SNR = P_rx / N_0，所以 N_0 = P_rx / SNR
+    N_0 = P_rx / SNR_linear
+    
+    # 硬件引起的信号相关噪声
+    # 这是关键：必须使用profile.Gamma_eff！
+    sigma_hw_sq = P_rx * profile.Gamma_eff
+    
+    # 相位噪声放大因子
     phase_noise_factor = np.exp(profile.phase_noise_variance)
     
-    # DSE residual (from manuscript, negligible after compensation)
-    sigma_DSE_sq = 0.001 / SNR_linear
+    # DSE残差（可忽略）
+    sigma_DSE_sq = 0.001 * N_0 / SNR_linear
     
-    # Total effective noise variance (Eq. (24) in manuscript)
-    # 修正：硬件噪声应该乘以相位噪声因子
+    # 总有效噪声方差
+    # 注意：硬件噪声需要乘以相位噪声因子
     sigma_eff_sq = N_0 + sigma_hw_sq * phase_noise_factor + sigma_DSE_sq
     
     return sigma_eff_sq, N_0
+
 
 def calculate_position_bcrlb(
     f_c: float,
@@ -129,32 +135,19 @@ def calculate_position_bcrlb(
     """
     Calculate Position Bayesian Cramér-Rao Lower Bound.
     
-    Implements Eq. (49) from the manuscript:
-    BCRLB_position = (c²/(8π²f_c²)) * (σ_eff²/(M|g|²|B|²)) * e^(σ_φ²)
-    
-    Args:
-        f_c: Carrier frequency [Hz] (SI unit)
-        sigma_eff_sq: Effective noise variance
-        M: Number of pilot symbols
-        channel_gain: Channel gain magnitude |g|
-        B: Bussgang gain magnitude |B|
-        sigma_phi_sq: Phase noise variance [rad²]
-        
-    Returns:
-        Position BCRLB [m²] (SI unit)
+    确保f_c²依赖性正确实现
     """
-    # First term: fundamental ranging resolution
-    term1 = PhysicalConstants.c ** 2 / (8 * np.pi**2 * f_c**2)
+    # 接收信号功率（用于FIM计算）
+    P_rx = (channel_gain ** 2) * (B ** 2)  # 假设单位发射功率
     
-    # Second term: SNR-dependent factor
-    term2 = sigma_eff_sq / (M * channel_gain**2 * B**2)
+    # Fisher信息（与频率平方成正比）
+    FIM = (8 * np.pi**2 * f_c**2 * M * P_rx * np.exp(-sigma_phi_sq)) / (PhysicalConstants.c**2 * sigma_eff_sq)
     
-    # Third term: phase noise penalty
-    term3 = np.exp(sigma_phi_sq)
-    
-    bcrlb_position = term1 * term2 * term3
+    # BCRLB是FIM的逆
+    bcrlb_position = 1 / FIM
     
     return bcrlb_position
+
 
 def simulate_ranging_crlb_vs_snr():
     """Generate Figure 1: Ranging CRLB vs. SNR for different carrier frequencies."""
@@ -260,7 +253,7 @@ def simulate_ranging_crlb_vs_hardware():
         print(f"  BCRLB = {bcrlb_pos:.2e} m²")
         print(f"  Ranging RMSE = {ranging_rmse_m:.2e} m")
 
-        
+
 def main():
     """Main function to run all simulations."""
     print("=== THz ISL ISAC CRLB Simulation ===")
