@@ -282,7 +282,7 @@ def plot_snr_to_hardware_limit():
     plt.savefig('snr_to_hardware_limit.png', format='png', dpi=300)
     plt.show()
     
-    print(f"High Performance: 95% of ceiling at {snr_dB[np.argmin(np.abs(capacities - 0.95 * ceiling)):.1f} dB")
+    print(f"High Performance: 95% of ceiling at {snr_dB[np.argmin(np.abs(capacities - 0.95 * ceiling))]:.1f} dB")
 
 def plot_gamma_eff_sensitivity():
     """Plot system performance sensitivity to hardware quality factor."""

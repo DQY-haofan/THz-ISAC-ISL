@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-simulation_config.py - UPDATED VERSION WITH CORRECT PARAMETERS
-
-Key fixes:
-1. Adjusted SWaP_Efficient Gamma_eff to 0.025 (from supporting document)
-2. Added option for larger antenna diameter for better link budget
-3. Verified phase noise variance calculation
+simulation_config.py - Enhanced version with extended hardware profiles
 """
 
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 # =============================================================================
 # PHYSICAL CONSTANTS (SI UNITS)
@@ -36,7 +31,7 @@ class ScenarioParameters:
     
     # Carrier frequency range [Hz]
     f_c_min: float = 100e9      # Minimum carrier frequency [Hz] (100 GHz)
-    f_c_max: float = 600e9      # Maximum carrier frequency [Hz] (600 GHz)
+    f_c_max: float = 1000e9     # Maximum carrier frequency [Hz] (1 THz) - Extended!
     f_c_default: float = 300e9  # Default carrier frequency [Hz] (300 GHz)
     
     # ISL geometry [meters]
@@ -49,20 +44,36 @@ class ScenarioParameters:
     v_rel_default: float = 10e3 # Default relative velocity [m/s] (10 km/s)
     a_rel_max: float = 100      # Maximum relative acceleration [m/s²]
     
-    # Antenna parameters
-    D_antenna: float = 0.5      # Default antenna diameter [m]
-    D_antenna_large: float = 1.0  # Large antenna option [m]
-    eta_antenna: float = 0.55   # Antenna efficiency
+    # Enhanced antenna parameters for THz
+    antenna_options: Dict[str, float] = None  # Will be set in __post_init__
     
-    # Transmit power options
-    P_tx_dBm_default: float = 20  # Default: 20 dBm (100 mW)
-    P_tx_dBm_high: float = 30     # High power: 30 dBm (1 W)
+    # Enhanced transmit power options
+    power_options: Dict[str, float] = None    # Will be set in __post_init__
+    
+    def __post_init__(self):
+        """Initialize dictionaries after dataclass creation."""
+        self.antenna_options = {
+            "small": 0.3,      # 30 cm - compact
+            "medium": 0.5,     # 50 cm - baseline
+            "large": 1.0,      # 1 m - enhanced
+            "xlarge": 2.0      # 2 m - maximum performance
+        }
+        
+        self.power_options = {
+            "low": 10,         # 10 dBm (10 mW)
+            "medium": 20,      # 20 dBm (100 mW)
+            "high": 30,        # 30 dBm (1 W)
+            "maximum": 33      # 33 dBm (2 W) - practical limit
+        }
+    
+    # Antenna efficiency
+    eta_antenna: float = 0.65   # Enhanced for THz
     
     # Derived antenna parameters
     def antenna_gain(self, diameter: float = None, frequency_hz: float = None) -> float:
         """Calculate antenna gain [linear] for given diameter and frequency."""
         if diameter is None:
-            diameter = self.D_antenna
+            diameter = self.antenna_options["medium"]
         if frequency_hz is None:
             frequency_hz = self.f_c_default
             
@@ -76,7 +87,7 @@ class ScenarioParameters:
     def beamwidth_3dB(self, frequency_hz: float, diameter: float = None) -> float:
         """Calculate 3dB beamwidth [rad] at given frequency."""
         if diameter is None:
-            diameter = self.D_antenna
+            diameter = self.antenna_options["medium"]
         lambda_c = PhysicalConstants.wavelength(frequency_hz)
         return 1.02 * lambda_c / diameter
     
@@ -86,20 +97,20 @@ class ScenarioParameters:
         return 2.77 / (theta_3dB ** 2)
 
 # =============================================================================
-# HARDWARE PROFILES - CORRECTED VALUES
+# EXTENDED HARDWARE PROFILES
 # =============================================================================
 @dataclass
 class HardwareComponentSpecs:
     """Specifications for individual hardware components."""
     
     # Power Amplifier
-    PA_technology: str          # Technology type (e.g., "InP DHBT", "CMOS with DPD")
+    PA_technology: str          # Technology type
     PA_EVM_percent: float       # PA Error Vector Magnitude [%]
     PA_P_sat_dBm: float        # PA saturation power [dBm]
     PA_efficiency: float        # Power-added efficiency
     
     # Local Oscillator / PLL
-    LO_technology: str          # Technology type (e.g., "28nm CMOS", "SiGe BiCMOS")
+    LO_technology: str          # Technology type
     LO_RMS_jitter_fs: float    # RMS timing jitter [femtoseconds]
     LO_linewidth_Hz: float     # 3dB linewidth [Hz]
     
@@ -132,29 +143,16 @@ class HardwareProfile:
     
     @property
     def phase_noise_variance(self) -> float:
-        """
-        Calculate phase noise variance σ_φ² [rad²].
-        Using paper's formula: σ_φ² ≈ (4/3) * π * Δν * T
-        """
+        """Calculate phase noise variance σ_φ² [rad²]."""
         delta_nu = self.components.LO_linewidth_Hz
         T = self.frame_duration_s
-        
-        # From paper's approximation for Wiener process
         variance = (4/3) * np.pi * delta_nu * T
-        
-        # Print warning if variance is too large
-        if variance > 0.1:
-            print(f"WARNING: Phase noise variance {variance:.3f} rad² may be too large for approximations!")
-        
         return variance
     
     @property
     def coherence_time(self) -> float:
-        """
-        Estimate coherence time for σ_φ² ≈ 0.1 rad² (reasonable limit).
-        """
+        """Estimate coherence time for σ_φ² ≈ 0.1 rad²."""
         delta_nu = self.components.LO_linewidth_Hz
-        # Solve: (4/3) * π * Δν * T_coh = 0.1
         return 0.1 / ((4/3) * np.pi * delta_nu)
     
     @property
@@ -162,84 +160,126 @@ class HardwareProfile:
         """Total system EVM [%]."""
         return 100 * np.sqrt(self.Gamma_eff)
 
-# Define hardware profiles based on the supporting document
-HIGH_PERFORMANCE_PROFILE = HardwareProfile(
-    name="High_Performance",
-    description="III-V semiconductor based system optimized for performance",
-    
-    # Aggregate quality factor (from supporting document)
-    Gamma_eff=0.01,
-    
-    # Component contributions (from Table 5 synthesis)
-    Gamma_PA=0.0112,          # InP DHBT PA with -19.5 dB EVM
-    Gamma_LO=4.3e-7,          # Based on 20.9 fs RMS jitter
-    Gamma_ADC=1.7e-4,         # Based on ~6.0 ENOB
-    
-    # Component specifications
-    components=HardwareComponentSpecs(
-        # PA specs (220 GHz InP DHBT)
-        PA_technology="InP DHBT",
-        PA_EVM_percent=10.6,   # -19.5 dB EVM
-        PA_P_sat_dBm=15,       # Typical for InP at sub-THz
-        PA_efficiency=0.15,     # ~15% PAE for InP
-        
-        # LO specs (28nm CMOS PLL)
-        LO_technology="28nm CMOS",
-        LO_RMS_jitter_fs=20.9,
-        LO_linewidth_Hz=100e3,  # 100 kHz
-        
-        # ADC specs (20nm CMOS)
-        ADC_technology="20nm CMOS",
-        ADC_ENOB=5.95,
-        ADC_sampling_rate_Gsps=20
-    ),
-    
-    # Frame duration for σ_φ² ≈ 0.042 (from paper)
-    frame_duration_s=0.1e-6,    # 0.1 μs = 100 ns
-    signal_bandwidth_Hz=10e9    # 10 GHz
-)
-
-# CORRECTED: Using 0.025 from supporting document instead of 0.045
-SWAP_EFFICIENT_PROFILE = HardwareProfile(
-    name="SWaP_Efficient", 
-    description="Silicon-based system optimized for SWaP and cost with DPD",
-    
-    # CORRECTED: Aggregate quality factor from supporting document
-    Gamma_eff=0.025,  # Changed from 0.045 to match supporting document
-    
-    # Component contributions - adjusted proportionally
-    Gamma_PA=0.0222,          # SiGe with DPD (from supporting doc)
-    Gamma_LO=4.8e-6,          # Based on 70 fs RMS jitter
-    Gamma_ADC=6.5e-4,         # Based on 5.0 ENOB
-    
-    # Component specifications
-    components=HardwareComponentSpecs(
-        # PA specs (SiGe with DPD)
-        PA_technology="SiGe BiCMOS with DPD",
-        PA_EVM_percent=14.9,    # -16.5 dB EVM (from supporting doc)
-        PA_P_sat_dBm=10,        # Lower than InP
-        PA_efficiency=0.05,      # ~5% PAE for CMOS at THz
-        
-        # LO specs (SiGe BiCMOS)
-        LO_technology="0.25μm SiGe",
-        LO_RMS_jitter_fs=70,
-        LO_linewidth_Hz=100e3,   # 100 kHz
-        
-        # ADC specs (28nm CMOS)
-        ADC_technology="28nm CMOS", 
-        ADC_ENOB=5.0,
-        ADC_sampling_rate_Gsps=15
-    ),
-    
-    # Same frame duration for coherence
-    frame_duration_s=0.1e-6,    # 0.1 μs = 100 ns  
-    signal_bandwidth_Hz=10e9    # 10 GHz
-)
-
-# Dictionary for easy profile access
+# Extended hardware profiles with more options
 HARDWARE_PROFILES = {
-    "High_Performance": HIGH_PERFORMANCE_PROFILE,
-    "SWaP_Efficient": SWAP_EFFICIENT_PROFILE
+    # State-of-the-art profiles
+    "State_of_Art": HardwareProfile(
+        name="State_of_Art",
+        description="Best available technology (future projection)",
+        Gamma_eff=0.005,  # -23 dB EVM
+        Gamma_PA=0.0045,
+        Gamma_LO=2e-7,
+        Gamma_ADC=8e-5,
+        components=HardwareComponentSpecs(
+            PA_technology="Advanced InP HBT",
+            PA_EVM_percent=7.1,
+            PA_P_sat_dBm=18,
+            PA_efficiency=0.20,
+            LO_technology="Photonic Integration",
+            LO_RMS_jitter_fs=10,
+            LO_linewidth_Hz=10e3,  # 10 kHz
+            ADC_technology="7nm CMOS",
+            ADC_ENOB=7.0,
+            ADC_sampling_rate_Gsps=40
+        ),
+        frame_duration_s=1e-6,  # 1 μs
+        signal_bandwidth_Hz=50e9  # 50 GHz
+    ),
+    
+    # Original profiles
+    "High_Performance": HardwareProfile(
+        name="High_Performance",
+        description="III-V semiconductor based system",
+        Gamma_eff=0.01,
+        Gamma_PA=0.009,
+        Gamma_LO=4.3e-7,
+        Gamma_ADC=1.7e-4,
+        components=HardwareComponentSpecs(
+            PA_technology="InP DHBT",
+            PA_EVM_percent=10.6,
+            PA_P_sat_dBm=15,
+            PA_efficiency=0.15,
+            LO_technology="28nm CMOS",
+            LO_RMS_jitter_fs=20.9,
+            LO_linewidth_Hz=100e3,
+            ADC_technology="20nm CMOS",
+            ADC_ENOB=5.95,
+            ADC_sampling_rate_Gsps=20
+        ),
+        frame_duration_s=0.1e-6,
+        signal_bandwidth_Hz=10e9
+    ),
+    
+    "SWaP_Efficient": HardwareProfile(
+        name="SWaP_Efficient",
+        description="Silicon-based system with DPD",
+        Gamma_eff=0.025,
+        Gamma_PA=0.022,
+        Gamma_LO=4.8e-6,
+        Gamma_ADC=6.5e-4,
+        components=HardwareComponentSpecs(
+            PA_technology="SiGe BiCMOS with DPD",
+            PA_EVM_percent=14.9,
+            PA_P_sat_dBm=10,
+            PA_efficiency=0.05,
+            LO_technology="0.25μm SiGe",
+            LO_RMS_jitter_fs=70,
+            LO_linewidth_Hz=100e3,
+            ADC_technology="28nm CMOS",
+            ADC_ENOB=5.0,
+            ADC_sampling_rate_Gsps=15
+        ),
+        frame_duration_s=0.1e-6,
+        signal_bandwidth_Hz=10e9
+    ),
+    
+    # Low-cost profile
+    "Low_Cost": HardwareProfile(
+        name="Low_Cost",
+        description="Budget silicon solution",
+        Gamma_eff=0.05,  # -13 dB EVM
+        Gamma_PA=0.045,
+        Gamma_LO=1e-5,
+        Gamma_ADC=0.001,
+        components=HardwareComponentSpecs(
+            PA_technology="65nm CMOS",
+            PA_EVM_percent=22.4,
+            PA_P_sat_dBm=7,
+            PA_efficiency=0.02,
+            LO_technology="65nm CMOS",
+            LO_RMS_jitter_fs=150,
+            LO_linewidth_Hz=500e3,
+            ADC_technology="65nm CMOS",
+            ADC_ENOB=4.0,
+            ADC_sampling_rate_Gsps=10
+        ),
+        frame_duration_s=0.05e-6,  # Shorter to manage phase noise
+        signal_bandwidth_Hz=5e9
+    ),
+    
+    # Custom profile for parameter sweeps
+    "Custom": HardwareProfile(
+        name="Custom",
+        description="Configurable profile for sweeps",
+        Gamma_eff=0.01,  # Will be modified during sweeps
+        Gamma_PA=0.009,
+        Gamma_LO=4.3e-7,
+        Gamma_ADC=1.7e-4,
+        components=HardwareComponentSpecs(
+            PA_technology="Variable",
+            PA_EVM_percent=10.0,
+            PA_P_sat_dBm=15,
+            PA_efficiency=0.10,
+            LO_technology="Variable",
+            LO_RMS_jitter_fs=50,
+            LO_linewidth_Hz=100e3,
+            ADC_technology="Variable",
+            ADC_ENOB=6.0,
+            ADC_sampling_rate_Gsps=20
+        ),
+        frame_duration_s=0.1e-6,
+        signal_bandwidth_Hz=10e9
+    )
 }
 
 # =============================================================================
@@ -251,22 +291,23 @@ class SimulationControl:
     
     # SNR range for simulations
     SNR_dB_min: float = -10     # Minimum SNR [dB]
-    SNR_dB_max: float = 40      # Maximum SNR [dB]
-    SNR_dB_points: int = 51     # Number of SNR points
+    SNR_dB_max: float = 50      # Maximum SNR [dB] - Extended!
+    SNR_dB_points: int = 61     # Number of SNR points
     
     # Monte Carlo parameters
     n_monte_carlo: int = 1000   # Number of MC iterations
     n_pilots: int = 64          # Number of pilot symbols (M in manuscript)
     
     # Frequency sweep parameters  
-    f_c_sweep_points: int = 5   # Number of carrier frequencies to test
+    f_c_sweep_points: int = 7   # More frequency points
     
-    # Channel state parameters
-    n_channel_realizations: int = 100  # Number of channel state realizations
+    # Hardware parameter sweep
+    gamma_eff_sweep: List[float] = None  # Will be set in __post_init__
     
-    # Convergence parameters
-    convergence_threshold: float = 1e-6
-    max_iterations: int = 100
+    def __post_init__(self):
+        """Initialize sweep arrays."""
+        # Logarithmic sweep of hardware quality factor
+        self.gamma_eff_sweep = np.logspace(-3, -1, 20).tolist()  # 0.001 to 0.1
     
     @property
     def SNR_dB_array(self) -> np.ndarray:
@@ -306,11 +347,6 @@ class DerivedParameters:
         }
     
     @staticmethod
-    def doppler_shift(velocity_ms: float, frequency_Hz: float) -> float:
-        """Calculate Doppler shift [Hz]."""
-        return frequency_Hz * velocity_ms / PhysicalConstants.c
-    
-    @staticmethod
     def thermal_noise_power(bandwidth_Hz: float, 
                            temperature_K: float = PhysicalConstants.T_noise,
                            noise_figure_dB: float = 10) -> float:
@@ -324,127 +360,65 @@ class DerivedParameters:
                                noise_figure_dB: float = 10) -> float:
         """Calculate thermal noise power [dBm]."""
         noise_watts = DerivedParameters.thermal_noise_power(bandwidth_Hz, temperature_K, noise_figure_dB)
-        return 10 * np.log10(noise_watts * 1000)  # Convert to dBm
+        return 10 * np.log10(noise_watts * 1000)
     
     @staticmethod
     def capacity_ceiling(Gamma_eff: float, sigma_phi_sq: float) -> float:
-        """
-        Calculate hardware-limited capacity ceiling [bits/symbol].
-        C_sat = log₂(1 + e^(-σ_φ²)/Γ_eff)
-        """
+        """Calculate hardware-limited capacity ceiling [bits/symbol]."""
         phase_factor = np.exp(-sigma_phi_sq)
         return np.log2(1 + phase_factor / Gamma_eff)
+    
+    @staticmethod
+    def find_snr_for_hardware_limit(Gamma_eff: float, target_ratio: float = 0.95) -> float:
+        """Find SNR where capacity reaches target_ratio of hardware ceiling."""
+        # For hardware-limited regime: SNR ≈ 1/Gamma_eff
+        # We want SNR where capacity = target_ratio * ceiling
+        # This occurs roughly when SNR = (1/Gamma_eff) / (1 - target_ratio)
+        return 10 * np.log10((1/Gamma_eff) / (1 - target_ratio))
+
+# =============================================================================
+# OBSERVABLE PARAMETERS FOR SINGLE ISL
+# =============================================================================
+class ObservableParameters:
+    """Define what can be observed with single ISL."""
+    
+    # Single ISL can only observe:
+    # 1. Range (radial distance)
+    # 2. Range-rate (radial velocity)
+    # Cannot observe: cross-track position/velocity, pointing errors
+    
+    observable_params = ["range", "range_rate"]
+    unobservable_params = ["cross_track_position", "cross_track_velocity", "pointing_errors"]
+    
+    @staticmethod
+    def get_observable_dimension():
+        """Return dimension of observable parameter space."""
+        return len(ObservableParameters.observable_params)
+    
+    @staticmethod
+    def print_observability_warning():
+        """Print warning about single ISL limitations."""
+        print("\n" + "="*70)
+        print("WARNING: Single ISL Observability Limitations")
+        print("="*70)
+        print("Observable parameters (2):")
+        for param in ObservableParameters.observable_params:
+            print(f"  ✓ {param}")
+        print("\nUnobservable parameters (6):")
+        for param in ObservableParameters.unobservable_params:
+            print(f"  ✗ {param}")
+        print("\nNote: Full 3D state estimation requires multiple non-coplanar ISLs")
+        print("="*70 + "\n")
 
 # =============================================================================
 # DEFAULT CONFIGURATION INSTANCE
 # =============================================================================
-# Create default instances for easy import
 scenario = ScenarioParameters()
 simulation = SimulationControl()
 constants = PhysicalConstants()
 derived = DerivedParameters()
+observable = ObservableParameters()
 
-# =============================================================================
-# CONFIGURATION VALIDATION AND LINK BUDGET CHECK
-# =============================================================================
-def validate_configuration():
-    """Validate configuration parameters for consistency."""
-    
-    print("=== Configuration Validation ===\n")
-    
-    # Check link budget for different scenarios
-    print("Link Budget Analysis:")
-    print("-" * 70)
-    
-    scenarios = [
-        ("Default (0.5m, 20dBm)", scenario.D_antenna, scenario.P_tx_dBm_default),
-        ("Large Antenna (1m, 20dBm)", scenario.D_antenna_large, scenario.P_tx_dBm_default),
-        ("High Power (0.5m, 30dBm)", scenario.D_antenna, scenario.P_tx_dBm_high),
-        ("Both (1m, 30dBm)", scenario.D_antenna_large, scenario.P_tx_dBm_high)
-    ]
-    
-    for name, diameter, tx_power in scenarios:
-        print(f"\n{name}:")
-        
-        # Calculate gains
-        tx_gain = scenario.antenna_gain_dB(diameter)
-        rx_gain = tx_gain  # Same antenna
-        
-        # Calculate link budget
-        budget = derived.link_budget_dB(
-            tx_power, tx_gain, rx_gain,
-            scenario.R_default, scenario.f_c_default
-        )
-        
-        # Calculate noise floor
-        noise_dBm = derived.thermal_noise_power_dBm(10e9, noise_figure_dB=10)
-        
-        # Link margin
-        margin = budget['rx_power_dBm'] - noise_dBm
-        
-        print(f"  Tx Power: {tx_power:.1f} dBm")
-        print(f"  Antenna Gain: {tx_gain:.1f} dBi (each)")
-        print(f"  Path Loss: {budget['path_loss_dB']:.1f} dB")
-        print(f"  Rx Power: {budget['rx_power_dBm']:.1f} dBm")
-        print(f"  Noise Floor: {noise_dBm:.1f} dBm")
-        print(f"  Link Margin: {margin:.1f} dB {'✓' if margin > 0 else '✗ INSUFFICIENT'}")
-    
-    print("\n" + "-" * 70)
-    
-    # Check hardware profiles
-    print("\nHardware Profiles:")
-    for name, profile in HARDWARE_PROFILES.items():
-        print(f"\n{name}:")
-        
-        # Verify component contributions sum correctly
-        component_sum = profile.Gamma_PA + profile.Gamma_LO + profile.Gamma_ADC
-        relative_error = abs(component_sum - profile.Gamma_eff) / profile.Gamma_eff
-        
-        print(f"  Gamma_eff: {profile.Gamma_eff:.4f}")
-        print(f"  Component sum: {component_sum:.4f} (error: {relative_error*100:.1f}%)")
-        
-        # Calculate and display phase noise variance
-        sigma_phi_sq = profile.phase_noise_variance
-        print(f"  Phase noise variance: {sigma_phi_sq:.4f} rad² (σ_φ = {np.sqrt(sigma_phi_sq):.3f} rad)")
-        
-        # Check coherence
-        print(f"  Frame duration: {profile.frame_duration_s*1e6:.1f} μs")
-        print(f"  Coherence time (for σ_φ²=0.1): {profile.coherence_time*1e6:.1f} μs")
-        
-        if sigma_phi_sq > 0.1:
-            print(f"  ⚠️  WARNING: Frame duration may be too long for coherent processing!")
-        else:
-            print(f"  ✓ Frame duration suitable for coherent processing")
-        
-        # Calculate capacity ceiling
-        ceiling = derived.capacity_ceiling(profile.Gamma_eff, sigma_phi_sq)
-        print(f"  Capacity ceiling: {ceiling:.2f} bits/symbol")
-    
-    # Print recommendations
-    print("\n" + "="*70)
-    print("RECOMMENDATIONS:")
-    print("1. For positive link margin at 2000 km:")
-    print("   - Use 1m antennas OR")
-    print("   - Increase Tx power to 30 dBm OR")
-    print("   - Use both for robust operation")
-    print("2. SWaP_Efficient Gamma_eff corrected to 0.025 (was 0.045)")
-    print("3. Frame duration of 100 ns is correct for 100 kHz linewidth")
-    print("="*70 + "\n")
-
-# Run validation on import
+# Print observability warning on import
 if __name__ == "__main__":
-    validate_configuration()
-    
-    # Print summary
-    print("\n=== THz ISL ISAC Simulation Configuration Summary ===")
-    print(f"\nCarrier Frequency Range: {scenario.f_c_min/1e9:.0f} - {scenario.f_c_max/1e9:.0f} GHz")
-    print(f"ISL Distance Range: {scenario.R_min/1e3:.0f} - {scenario.R_max/1e3:.0f} km")
-    print(f"Default Operating Point: {scenario.f_c_default/1e9:.0f} GHz, {scenario.R_default/1e3:.0f} km")
-    
-    print("\n--- Hardware Profiles (CORRECTED) ---")
-    for name, profile in HARDWARE_PROFILES.items():
-        print(f"\n{name}:")
-        print(f"  Gamma_eff: {profile.Gamma_eff:.4f} (EVM: {profile.EVM_total_percent:.1f}%)")
-        print(f"  Phase noise variance: {profile.phase_noise_variance:.4f} rad²")
-        print(f"  Frame duration: {profile.frame_duration_s*1e9:.0f} ns")
-        print(f"  Capacity Ceiling: {derived.capacity_ceiling(profile.Gamma_eff, profile.phase_noise_variance):.2f} bits/symbol")
+    observable.print_observability_warning()

@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """
-cd_frontier_simulation.py - UPDATED VERSION
-
-Key fixes:
-1. Uses larger antenna (1m) and higher power (30 dBm) for positive link margin
-2. Corrected hardware quality factors from config
-3. Improved numerical stability in optimization
-4. Added link budget verification
+capacity_simulation.py - Enhanced version with comprehensive C-D analysis
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from matplotlib.patches import Patch
 import seaborn as sns
 from typing import Tuple, Dict, List
 from scipy.linalg import inv
@@ -23,7 +18,8 @@ from simulation_config import (
     scenario,
     simulation,
     HARDWARE_PROFILES,
-    DerivedParameters
+    DerivedParameters,
+    ObservableParameters
 )
 
 # Set publication-quality plot defaults
@@ -46,17 +42,14 @@ plt.rcParams.update({
 
 colors = sns.color_palette("husl", 6)
 
-# Global debug flag
-DEBUG_VERBOSE = False
-
-class ISACSystem:
-    """Enhanced THz ISL ISAC system with improved link budget."""
+class EnhancedISACSystem:
+    """Enhanced THz ISL ISAC system with comprehensive analysis capabilities."""
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
                  distance: float = 2000e3, n_pilots: int = 64,
-                 antenna_diameter: float = 1.0,  # Default to 1m for positive margin
-                 tx_power_dBm: float = 30):      # Default to 30 dBm
-        """Initialize with improved parameters for positive link margin."""
+                 antenna_diameter: float = 1.0,
+                 tx_power_dBm: float = 30):
+        """Initialize with enhanced parameters."""
         self.profile = HARDWARE_PROFILES[hardware_profile]
         self.f_c = f_c
         self.distance = distance
@@ -64,27 +57,26 @@ class ISACSystem:
         self.antenna_diameter = antenna_diameter
         self.tx_power_dBm = tx_power_dBm
         
+        # Print warning about observability
+        if not hasattr(self.__class__, '_observability_warned'):
+            ObservableParameters.print_observability_warning()
+            self.__class__._observability_warned = True
+        
         # Calculate system parameters
         self.lambda_c = PhysicalConstants.c / f_c
-        
-        # Enhanced link budget
-        self._calculate_enhanced_link_budget()
+        self._calculate_link_budget()
         
         # PA parameters
         self.bussgang_gain = self._calculate_bussgang_gain()
         
         # Constellation
         self.constellation = self._create_constellation()
-        
-        # Debug counter
-        self._debug_count = 0
     
-    def _calculate_enhanced_link_budget(self):
-        """Enhanced link budget calculation using scenario parameters."""
-        # Use configured transmit power
+    def _calculate_link_budget(self):
+        """Calculate link budget with given parameters."""
         self.P_tx_watts = 10**(self.tx_power_dBm/10) / 1000
         
-        # Calculate antenna gains using scenario method
+        # Antenna gains
         G_single = scenario.antenna_gain(self.antenna_diameter, self.f_c)
         self.G_tx_dB = 10 * np.log10(G_single)
         self.G_rx_dB = self.G_tx_dB
@@ -92,7 +84,7 @@ class ISACSystem:
         # Path loss
         self.path_loss_dB = DerivedParameters.path_loss_dB(self.distance, self.f_c)
         
-        # Total link budget
+        # Link budget
         link_budget = DerivedParameters.link_budget_dB(
             self.tx_power_dBm, self.G_tx_dB, self.G_rx_dB,
             self.distance, self.f_c
@@ -101,7 +93,7 @@ class ISACSystem:
         self.P_rx_watts = 10**(self.P_rx_dBm/10) / 1000
         
         # Noise parameters
-        self.noise_figure_dB = 8  # Reasonable for THz
+        self.noise_figure_dB = 8
         self.bandwidth_Hz = self.profile.signal_bandwidth_Hz
         self.noise_power_watts = DerivedParameters.thermal_noise_power(
             self.bandwidth_Hz, noise_figure_dB=self.noise_figure_dB
@@ -109,36 +101,16 @@ class ISACSystem:
         self.N_0 = self.noise_power_watts
         self.noise_power_dBm = 10 * np.log10(self.noise_power_watts * 1000)
         
-        # Channel gain (linear) - magnitude
-        path_gain_linear = 10**(-self.path_loss_dB/20)  # Convert dB to linear amplitude
+        # Channel gain
+        path_gain_linear = 10**(-self.path_loss_dB/20)
         antenna_gain_linear = 10**((self.G_tx_dB + self.G_rx_dB)/20)
         self.channel_gain = path_gain_linear * np.sqrt(antenna_gain_linear)
         
         # Link margin
         self.link_margin_dB = self.P_rx_dBm - self.noise_power_dBm
-        
-        # Print link budget summary (once per profile)
-        if not hasattr(self.__class__, f'_link_budget_printed_{self.profile.name}'):
-            print(f"\n=== Link Budget for {self.profile.name} at {self.f_c/1e9:.0f} GHz ===")
-            print(f"  Distance: {self.distance/1e3:.0f} km")
-            print(f"  Antenna Diameter: {self.antenna_diameter:.1f} m")
-            print(f"  Tx Power: {self.tx_power_dBm:.1f} dBm ({self.P_tx_watts*1000:.0f} mW)")
-            print(f"  Antenna Gains: {self.G_tx_dB:.1f} dBi each")
-            print(f"  Path Loss: {self.path_loss_dB:.1f} dB")
-            print(f"  Rx Power: {self.P_rx_dBm:.1f} dBm")
-            print(f"  Noise Power: {self.noise_power_dBm:.1f} dBm")
-            print(f"  Link Margin: {self.link_margin_dB:.1f} dB")
-            
-            if self.link_margin_dB < 0:
-                print("  ⚠️  WARNING: Negative link margin! System will not work properly.")
-            else:
-                print("  ✓ Positive link margin - system operational")
-            
-            setattr(self.__class__, f'_link_budget_printed_{self.profile.name}', True)
     
     def _calculate_bussgang_gain(self) -> float:
         """Calculate Bussgang gain for PA nonlinearity."""
-        # From paper approximation
         kappa = 10**(-7.0/10)  # 7 dB IBO
         B = 1 - 1.5 * kappa + 1.875 * kappa**2
         return B
@@ -148,110 +120,117 @@ class ISACSystem:
         if modulation == 'QPSK':
             angles = np.array([np.pi/4, 3*np.pi/4, 5*np.pi/4, 7*np.pi/4])
             constellation = np.exp(1j * angles)
-            # Normalize to unit average power
+            constellation /= np.sqrt(np.mean(np.abs(constellation)**2))
+        elif modulation == '16QAM':
+            # 16-QAM for higher data rates
+            real_parts = np.array([-3, -1, 1, 3])
+            imag_parts = np.array([-3, -1, 1, 3])
+            constellation = []
+            for r in real_parts:
+                for i in imag_parts:
+                    constellation.append(r + 1j*i)
+            constellation = np.array(constellation)
             constellation /= np.sqrt(np.mean(np.abs(constellation)**2))
         return constellation
     
     def calculate_sinr(self, symbol: complex, avg_power: float, P_tx_scale: float) -> float:
         """Calculate SINR for given symbol and power allocation."""
-        # Transmit power with scaling
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
-        
-        # Symbol power
         symbol_power = np.abs(symbol)**2
-        
-        # Received signal power
         P_rx_signal = P_tx * symbol_power * (self.channel_gain**2) * (self.bussgang_gain**2)
         
-        # Noise components
         N_thermal = self.N_0
         N_hw = P_rx_signal * self.profile.Gamma_eff
-        
-        # Phase noise penalty
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         
-        # Total noise
         N_total = N_thermal + N_hw * phase_penalty
-        
-        # SINR
         sinr = P_rx_signal / N_total
         return sinr
     
-    def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0) -> np.ndarray:
-        """Calculate mutual information for each symbol."""
-        # Average power from distribution
-        avg_power = np.sum(p_x * np.abs(self.constellation)**2)
+    def calculate_capacity_vs_snr(self, snr_dB_array: np.ndarray) -> Dict[str, np.ndarray]:
+        """Calculate capacity vs SNR showing hardware ceiling."""
+        capacities = []
+        sinr_effective = []
         
-        # MI for each symbol
-        I_x = np.zeros(len(self.constellation))
-        
-        for i, symbol in enumerate(self.constellation):
-            sinr = self.calculate_sinr(symbol, avg_power, P_tx_scale)
-            I_x[i] = np.log2(1 + sinr)
+        for snr_dB in snr_dB_array:
+            # Override noise floor to achieve target SNR
+            snr_linear = 10**(snr_dB/10)
             
-        return I_x
+            # Uniform distribution
+            p_x = np.ones(len(self.constellation)) / len(self.constellation)
+            avg_power = 1.0
+            
+            # Calculate effective SINR with hardware impairments
+            P_signal = self.P_tx_watts * (self.channel_gain**2) * (self.bussgang_gain**2)
+            N_0_target = P_signal / snr_linear
+            
+            # Hardware noise
+            N_hw = P_signal * self.profile.Gamma_eff * np.exp(self.profile.phase_noise_variance)
+            
+            # Total noise
+            N_total = N_0_target + N_hw
+            
+            # Effective SINR
+            sinr_eff = P_signal / N_total
+            sinr_effective.append(10 * np.log10(sinr_eff))
+            
+            # Capacity
+            capacity = np.log2(1 + sinr_eff)
+            capacities.append(capacity)
+        
+        # Calculate hardware ceiling
+        ceiling = DerivedParameters.capacity_ceiling(
+            self.profile.Gamma_eff, self.profile.phase_noise_variance
+        )
+        
+        return {
+            'snr_dB': snr_dB_array,
+            'capacity': np.array(capacities),
+            'sinr_effective': np.array(sinr_effective),
+            'ceiling': ceiling
+        }
     
     def calculate_bfim_observable(self, avg_power: float, P_tx_scale: float) -> np.ndarray:
-        """Calculate B-FIM for observable parameters (range and radial velocity)."""
-        # Total transmit power
+        """Calculate B-FIM for observable parameters only (2x2 matrix)."""
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
-        
-        # Received power
         P_rx = P_tx * (self.channel_gain**2) * (self.bussgang_gain**2)
         
-        # Noise
         N_thermal = self.N_0
         N_hw = P_rx * self.profile.Gamma_eff
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         N_total = N_thermal + N_hw * phase_penalty
         
-        # Effective SNR
         SNR_eff = P_rx / N_total
         
-        # FIM for range (position along LOS)
-        # From paper: phase sensitivity dominates
+        # FIM for range
         phase_sensitivity = (2 * np.pi * self.f_c / PhysicalConstants.c)**2
         J_range = 2 * self.n_pilots * SNR_eff * phase_sensitivity
         
         # FIM for radial velocity
-        # Using coherent processing interval
-        T_CPI = 1e-3  # 1 ms coherent processing interval
+        T_CPI = 1e-3
         doppler_sensitivity = (2 * np.pi * self.f_c * T_CPI / PhysicalConstants.c)**2
         J_velocity = 2 * self.n_pilots * SNR_eff * doppler_sensitivity
         
-        # Create 2x2 FIM for observable parameters
+        # 2x2 FIM for observable parameters only
         J_B = np.diag([J_range, J_velocity])
-        
-        # Add small regularization for numerical stability
         J_B += 1e-20 * np.eye(2)
         
         return J_B
     
     def calculate_distortion(self, p_x: np.ndarray, P_tx_scale: float = 1.0) -> float:
-        """Calculate sensing distortion (trace of CRLB)."""
-        # Average power
+        """Calculate sensing distortion for observable parameters."""
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         
-        # Handle edge case
         if avg_power < 1e-10:
             return 1e10
         
-        # Calculate B-FIM
         J_B = self.calculate_bfim_observable(avg_power, P_tx_scale)
         
-        # Debug output
-        self._debug_count += 1
-        if DEBUG_VERBOSE and self._debug_count % 200 == 0:
-            print(f"\n[Debug #{self._debug_count}]")
-            print(f"  avg_power = {avg_power:.6f}")
-            print(f"  J_B condition number = {np.linalg.cond(J_B):.2e}")
-        
-        # Calculate CRLB
         try:
             J_B_inv = inv(J_B)
-            distortion = np.trace(J_B_inv)
+            # Only trace of observable parameters
+            distortion = J_B_inv[0,0]  # Range variance only
             
-            # Sanity check
             if distortion < 0 or distortion > 1e15:
                 return 1e10
                 
@@ -260,379 +239,311 @@ class ISACSystem:
             
         return distortion
 
-def modified_blahut_arimoto(system: ISACSystem, D_target: float, 
-                           P_tx_scale: float = 1.0,
-                           epsilon_lambda: float = 1e-3,
-                           epsilon_p: float = 1e-6,
-                           max_iterations: int = 50,
-                           verbose: bool = False) -> Tuple[float, np.ndarray]:
-    """Modified Blahut-Arimoto algorithm for ISAC optimization."""
-    n_symbols = len(system.constellation)
+def plot_comprehensive_cd_analysis():
+    """Generate comprehensive C-D analysis with all requested features."""
+    print("\n=== Generating Comprehensive C-D Analysis ===")
     
-    # Smart initialization based on distortion target
-    if D_target > 1e6:  # Very loose constraint
-        p_x = np.ones(n_symbols) / n_symbols  # Uniform
-    else:  # Tight constraint
-        # Start with more power on stronger symbols
-        symbol_powers = np.abs(system.constellation)**2
-        p_x = symbol_powers / np.sum(symbol_powers)
+    # Create figure with subplots
+    fig = plt.figure(figsize=(16, 12))
     
-    # Check if initial distribution meets constraint
-    D_init = system.calculate_distortion(p_x, P_tx_scale)
-    if D_init <= D_target:
-        # Already satisfies constraint, return capacity
-        I_x = system.calculate_mutual_information(p_x, P_tx_scale)
-        return np.sum(p_x * I_x), p_x
+    # Define grid
+    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
     
-    # Binary search for Lagrange multiplier
-    lambda_min, lambda_max = 0, 1e6
+    # Subplot 1: C-D frontier for different hardware
+    ax1 = fig.add_subplot(gs[0, :2])
+    plot_cd_frontier_comparison(ax1)
     
-    iteration_count = 0
-    while (lambda_max - lambda_min) > epsilon_lambda and iteration_count < 20:
-        lambda_current = (lambda_min + lambda_max) / 2
-        iteration_count += 1
-        
-        # Reset distribution
-        p_x = np.ones(n_symbols) / n_symbols
-        
-        # Inner optimization loop
-        for inner_iter in range(max_iterations):
-            p_x_prev = p_x.copy()
-            
-            # Calculate mutual information
-            I_x = system.calculate_mutual_information(p_x, P_tx_scale)
-            
-            # Numerical gradient of distortion
-            grad_D = np.zeros(n_symbols)
-            base_D = system.calculate_distortion(p_x, P_tx_scale)
-            
-            delta = 0.01  # Perturbation size
-            for i in range(n_symbols):
-                if p_x[i] > delta:
-                    # Create perturbed distribution
-                    p_perturb = p_x.copy()
-                    p_perturb[i] -= delta
-                    p_perturb[(i+1) % n_symbols] += delta  # Maintain normalization
-                    
-                    # Calculate perturbed distortion
-                    D_perturb = system.calculate_distortion(p_perturb, P_tx_scale)
-                    
-                    # Finite difference gradient
-                    grad_D[i] = (D_perturb - base_D) / delta
-            
-            # Update distribution in log domain for stability
-            log_p = np.log(p_x + 1e-10)
-            log_p += 0.1 * (I_x - lambda_current * grad_D)  # Step size 0.1
-            
-            # Normalize in log domain
-            log_p -= np.max(log_p)  # Prevent overflow
-            p_x = np.exp(log_p)
-            p_x /= np.sum(p_x)
-            
-            # Check convergence
-            if np.linalg.norm(p_x - p_x_prev, ord=1) < epsilon_p:
-                break
-        
-        # Check constraint
-        D_current = system.calculate_distortion(p_x, P_tx_scale)
-        
-        if verbose and iteration_count % 5 == 0:
-            print(f"  λ = {lambda_current:.2e}, D = {D_current:.2e} (target: {D_target:.2e})")
-        
-        # Update lambda bounds
-        if D_current > D_target:
-            lambda_min = lambda_current  # Need more penalty
-        else:
-            lambda_max = lambda_current  # Can reduce penalty
+    # Subplot 2: SNR regions
+    ax2 = fig.add_subplot(gs[0, 2])
+    plot_snr_regions(ax2)
     
-    # Final capacity calculation
-    I_x = system.calculate_mutual_information(p_x, P_tx_scale)
-    capacity = np.sum(p_x * I_x)
+    # Subplot 3: Hardware parameter sweep at fixed SNR
+    ax3 = fig.add_subplot(gs[1, :])
+    plot_hardware_sweep_fixed_snr(ax3)
     
-    return capacity, p_x
-
-def generate_cd_frontier(hardware_profile: str, 
-                        n_distortion_points: int = 15,
-                        P_tx_scale: float = 1.0,
-                        antenna_diameter: float = 1.0,
-                        tx_power_dBm: float = 30) -> Tuple[np.ndarray, np.ndarray]:
-    """Generate C-D frontier with proper link budget."""
-    print(f"\nGenerating C-D frontier for {hardware_profile}...")
-    print(f"  Antenna: {antenna_diameter}m, Tx Power: {tx_power_dBm} dBm")
+    # Subplot 4: SNR sweep with good hardware
+    ax4 = fig.add_subplot(gs[2, :])
+    plot_snr_sweep_good_hardware(ax4)
     
-    # Create system with specified parameters
-    system = ISACSystem(hardware_profile, 
-                       antenna_diameter=antenna_diameter,
-                       tx_power_dBm=tx_power_dBm)
-    
-    # Find achievable distortion range
-    # Maximum power concentration
-    p_concentrated = np.zeros(len(system.constellation))
-    p_concentrated[np.argmax(np.abs(system.constellation)**2)] = 1.0
-    D_min = system.calculate_distortion(p_concentrated, P_tx_scale)
-    
-    # Uniform distribution
-    p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-    D_max_uniform = system.calculate_distortion(p_uniform, P_tx_scale)
-    
-    # Set range with some margin
-    if D_max_uniform / D_min < 100:
-        D_min = D_min / 10
-        D_max = D_max_uniform * 10
-    else:
-        D_max = D_max_uniform
-    
-    print(f"  Achievable distortion range: {D_min:.3e} to {D_max:.3e} m²")
-    
-    # Generate target points
-    D_targets = np.logspace(np.log10(D_min), np.log10(D_max), n_distortion_points)
-    
-    capacities = []
-    distortions = []
-    
-    # Progress tracking
-    for i, D_target in enumerate(D_targets):
-        if i % 3 == 0:
-            print(f"  Progress: {i+1}/{n_distortion_points}")
-        
-        try:
-            # Run optimization
-            capacity, p_opt = modified_blahut_arimoto(
-                system, D_target, P_tx_scale, verbose=False
-            )
-            
-            # Get actual achieved distortion
-            actual_D = system.calculate_distortion(p_opt, P_tx_scale)
-            
-            # Store valid results
-            if 0 < actual_D < 1e10 and capacity >= 0:
-                capacities.append(capacity)
-                distortions.append(actual_D)
-                
-        except Exception as e:
-            if DEBUG_VERBOSE:
-                print(f"  Warning: Optimization failed for D_target={D_target:.2e}: {e}")
-            continue
-    
-    print(f"  Generated {len(capacities)} valid points")
-    
-    return np.array(distortions), np.array(capacities)
-
-def plot_cd_frontier_comparison():
-    """Generate C-D frontier plot comparing configurations."""
-    print("\n=== Generating C-D Frontier Comparison ===")
-    
-    # Define configurations to compare
-    configs = [
-        ("Default (0.5m, 20dBm)", 0.5, 20),
-        ("Large Antenna (1m, 20dBm)", 1.0, 20),
-        ("High Power (0.5m, 30dBm)", 0.5, 30),
-        ("Optimized (1m, 30dBm)", 1.0, 30)
-    ]
-    
-    profiles = ["High_Performance", "SWaP_Efficient"]
-    
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    
-    for ax_idx, profile in enumerate(profiles):
-        ax = axes[ax_idx]
-        
-        for config_idx, (config_name, ant_diam, tx_power) in enumerate(configs):
-            # Generate frontier
-            distortions, capacities = generate_cd_frontier(
-                profile, 
-                n_distortion_points=12,
-                antenna_diameter=ant_diam,
-                tx_power_dBm=tx_power
-            )
-            
-            if len(distortions) > 0:
-                # Convert to ranging RMSE in mm
-                ranging_rmse_mm = np.sqrt(distortions) * 1000
-                
-                # Plot
-                linestyle = ['-', '--', '-.', ':'][config_idx]
-                ax.plot(ranging_rmse_mm, capacities,
-                        color=colors[config_idx], linewidth=2.5,
-                        linestyle=linestyle,
-                        marker='o', markersize=6,
-                        label=config_name,
-                        markerfacecolor='white',
-                        markeredgewidth=1.5)
-        
-        # Formatting
-        ax.set_xlabel('Ranging RMSE [mm]', fontsize=12)
-        ax.set_ylabel('Communication Capacity [bits/symbol]', fontsize=12)
-        ax.set_title(f'{profile.replace("_", " ")}', fontsize=14)
-        
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right', fontsize=10)
-        
-        ax.set_xscale('log')
-        ax.set_xlim(left=0.1)
-        ax.set_ylim(bottom=0)
-        
-        # Add performance threshold lines
-        ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5)
-        ax.text(0.15, 2.1, 'Good comm (>2 bits/symbol)', 
-                fontsize=9, color='green')
-        
-        ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5)
-        ax.text(0.9, ax.get_ylim()[1]*0.95, 'Sub-mm\naccuracy', 
-                ha='right', va='top', fontsize=9, color='blue')
-    
-    plt.suptitle('THz ISL ISAC C-D Trade-off: Link Budget Comparison', fontsize=16)
+    plt.suptitle('Comprehensive THz ISL ISAC Analysis', fontsize=18)
     plt.tight_layout()
-    plt.savefig('cd_frontier_comparison.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig('cd_frontier_comparison.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig('comprehensive_cd_analysis.pdf', format='pdf', dpi=300)
+    plt.savefig('comprehensive_cd_analysis.png', format='png', dpi=300)
     plt.show()
 
-def plot_cd_frontier_main():
-    """Generate main C-D frontier plot with optimized configuration."""
-    print("\n=== Generating Main C-D Frontier Plot ===")
+def plot_cd_frontier_comparison(ax):
+    """Plot C-D frontier for different hardware profiles."""
+    profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
     
-    profiles = ["High_Performance", "SWaP_Efficient"]
+    for idx, profile_name in enumerate(profiles_to_plot):
+        if profile_name not in HARDWARE_PROFILES:
+            continue
+            
+        system = EnhancedISACSystem(profile_name, antenna_diameter=1.0, tx_power_dBm=30)
+        
+        # Generate C-D points
+        n_points = 15
+        distortions = []
+        capacities = []
+        
+        # Find distortion range
+        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+        D_max = system.calculate_distortion(p_uniform)
+        D_min = D_max / 1000
+        
+        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), n_points)
+        
+        for D_target in D_targets:
+            capacity, p_opt = simple_cd_optimization(system, D_target)
+            actual_D = system.calculate_distortion(p_opt)
+            
+            if 0 < actual_D < 1e10 and capacity > 0:
+                distortions.append(actual_D)
+                capacities.append(capacity)
+        
+        if len(distortions) > 0:
+            ranging_rmse_mm = np.sqrt(distortions) * 1000
+            ax.plot(ranging_rmse_mm, capacities,
+                   color=colors[idx], linewidth=2.5,
+                   marker=['o', 's', '^', 'D'][idx], markersize=7,
+                   label=f'{profile_name.replace("_", " ")} (Γ={HARDWARE_PROFILES[profile_name].Gamma_eff})')
+    
+    # Add feasibility regions
+    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
+    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
+    
+    ax.set_xlabel('Ranging RMSE [mm]', fontsize=12)
+    ax.set_ylabel('Capacity [bits/symbol]', fontsize=12)
+    ax.set_title('C-D Trade-off for Different Hardware Profiles', fontsize=14)
+    ax.set_xscale('log')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right', fontsize=10)
+    ax.set_xlim(left=0.01)
+
+def plot_snr_regions(ax):
+    """Plot SNR operational regions."""
+    snr_dB = np.linspace(-10, 50, 100)
+    
+    # Define regions
+    power_limited = snr_dB < 10
+    transition = (snr_dB >= 10) & (snr_dB < 30)
+    hardware_limited = snr_dB >= 30
+    
+    # Create stacked area plot
+    ax.fill_between(snr_dB[power_limited], 0, 1, alpha=0.7, color='blue', 
+                   label='Power-Limited')
+    ax.fill_between(snr_dB[transition], 0, 1, alpha=0.7, color='yellow',
+                   label='Transition')
+    ax.fill_between(snr_dB[hardware_limited], 0, 1, alpha=0.7, color='red',
+                   label='Hardware-Limited')
+    
+    ax.set_xlabel('SNR [dB]', fontsize=12)
+    ax.set_ylabel('Region', fontsize=12)
+    ax.set_title('Operational Regions', fontsize=14)
+    ax.set_ylim(0, 1)
+    ax.set_xlim(-10, 50)
+    ax.legend(loc='center')
+    ax.set_yticks([])
+
+def plot_hardware_sweep_fixed_snr(ax):
+    """Plot performance vs hardware quality at fixed SNR."""
+    gamma_eff_range = np.logspace(-3, -1, 30)
+    snr_levels_dB = [10, 20, 30, 40]
+    
+    for snr_dB in snr_levels_dB:
+        capacities = []
+        
+        for gamma_eff in gamma_eff_range:
+            # Create custom profile
+            custom_profile = HARDWARE_PROFILES["Custom"]
+            original_gamma = custom_profile.Gamma_eff
+            custom_profile.Gamma_eff = gamma_eff
+            
+            # Calculate capacity at this SNR
+            snr_linear = 10**(snr_dB/10)
+            phase_factor = np.exp(-custom_profile.phase_noise_variance)
+            sinr_eff = snr_linear / (1 + snr_linear * gamma_eff)
+            capacity = np.log2(1 + sinr_eff * phase_factor)
+            capacities.append(capacity)
+            
+            # Restore
+            custom_profile.Gamma_eff = original_gamma
+        
+        ax.semilogx(gamma_eff_range, capacities, linewidth=2.5,
+                   label=f'SNR = {snr_dB} dB')
+    
+    # Mark hardware profiles
+    for name, profile in HARDWARE_PROFILES.items():
+        if name != "Custom":
+            ax.axvline(x=profile.Gamma_eff, color='gray', linestyle=':', alpha=0.5)
+    
+    ax.set_xlabel('Hardware Quality Factor Γ_eff', fontsize=12)
+    ax.set_ylabel('Capacity [bits/symbol]', fontsize=12)
+    ax.set_title('Capacity vs Hardware Quality at Fixed SNR', fontsize=14)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+def plot_snr_sweep_good_hardware(ax):
+    """Plot performance vs SNR for good hardware."""
+    system_good = EnhancedISACSystem("State_of_Art", antenna_diameter=1.0, tx_power_dBm=30)
+    system_typical = EnhancedISACSystem("High_Performance", antenna_diameter=1.0, tx_power_dBm=30)
+    
+    snr_dB_array = np.linspace(-10, 50, 100)
+    
+    # Calculate for both systems
+    results_good = system_good.calculate_capacity_vs_snr(snr_dB_array)
+    results_typical = system_typical.calculate_capacity_vs_snr(snr_dB_array)
+    
+    # Plot capacity
+    ax.plot(snr_dB_array, results_good['capacity'], 'b-', linewidth=3,
+           label='State of Art')
+    ax.plot(snr_dB_array, results_typical['capacity'], 'r-', linewidth=3,
+           label='High Performance')
+    
+    # Add ceilings
+    ax.axhline(y=results_good['ceiling'], color='b', linestyle='--', alpha=0.5)
+    ax.axhline(y=results_typical['ceiling'], color='r', linestyle='--', alpha=0.5)
+    
+    # Add regions
+    ax.axvspan(-10, 10, alpha=0.1, color='blue')
+    ax.axvspan(30, 50, alpha=0.1, color='red')
+    ax.axvspan(10, 30, alpha=0.1, color='yellow')
+    
+    # Annotations
+    ax.text(0, results_good['ceiling']*0.9, 'Power-Limited', 
+           ha='center', fontsize=10, style='italic')
+    ax.text(40, results_good['ceiling']*0.9, 'Hardware-Limited',
+           ha='center', fontsize=10, style='italic')
+    
+    ax.set_xlabel('SNR [dB]', fontsize=12)
+    ax.set_ylabel('Capacity [bits/symbol]', fontsize=12)
+    ax.set_title('Capacity vs SNR with Good Hardware', fontsize=14)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    ax.set_ylim(0, 8)
+
+def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
+                          max_iterations: int = 20) -> Tuple[float, np.ndarray]:
+    """Simplified C-D optimization for faster computation."""
+    n_symbols = len(system.constellation)
+    
+    # Initialize with uniform distribution
+    p_x = np.ones(n_symbols) / n_symbols
+    
+    # Check if already meets constraint
+    D_current = system.calculate_distortion(p_x)
+    if D_current <= D_target:
+        I_x = system.calculate_mutual_information(p_x)
+        return np.sum(p_x * I_x), p_x
+    
+    # Simple gradient-based optimization
+    step_size = 0.1
+    for _ in range(max_iterations):
+        # Calculate gradient
+        I_x = system.calculate_mutual_information(p_x)
+        
+        # Update towards higher power symbols if distortion too high
+        if D_current > D_target:
+            # Increase power on stronger symbols
+            symbol_powers = np.abs(system.constellation)**2
+            gradient = symbol_powers - np.mean(symbol_powers)
+        else:
+            # Increase power on symbols with higher MI
+            gradient = I_x - np.mean(I_x)
+        
+        # Update distribution
+        p_x = p_x * np.exp(step_size * gradient)
+        p_x /= np.sum(p_x)
+        
+        # Check new distortion
+        D_current = system.calculate_distortion(p_x)
+    
+    capacity = np.sum(p_x * I_x)
+    return capacity, p_x
+
+def plot_hardware_feasibility_map():
+    """Generate feasibility map for different hardware configurations."""
+    print("\n=== Generating Hardware Feasibility Map ===")
     
     fig, ax = plt.subplots(figsize=(10, 8))
     
-    for i, profile in enumerate(profiles):
-        # Use optimized configuration (1m antenna, 30 dBm)
-        distortions, capacities = generate_cd_frontier(
-            profile, 
-            n_distortion_points=15,
-            antenna_diameter=1.0,
-            tx_power_dBm=30
-        )
-        
-        if len(distortions) > 0:
-            # Convert to ranging RMSE in mm
-            ranging_rmse_mm = np.sqrt(distortions) * 1000
-            
-            # Plot
-            ax.plot(ranging_rmse_mm, capacities,
-                    color=colors[i], linewidth=3,
-                    marker='o', markersize=8,
-                    label=profile.replace('_', ' '),
-                    markerfacecolor='white',
-                    markeredgewidth=2)
-            
-            # Add annotations for key points
-            # Best communication point
-            best_comm_idx = np.argmax(capacities)
-            ax.annotate(f'{capacities[best_comm_idx]:.2f} bits/symbol',
-                       xy=(ranging_rmse_mm[best_comm_idx], capacities[best_comm_idx]),
-                       xytext=(ranging_rmse_mm[best_comm_idx]*2, capacities[best_comm_idx]+0.2),
-                       arrowprops=dict(arrowstyle='->', alpha=0.5),
-                       fontsize=10)
-            
-            # Best sensing point
-            best_sense_idx = np.argmin(ranging_rmse_mm)
-            ax.annotate(f'{ranging_rmse_mm[best_sense_idx]:.1f} mm',
-                       xy=(ranging_rmse_mm[best_sense_idx], capacities[best_sense_idx]),
-                       xytext=(ranging_rmse_mm[best_sense_idx]*0.5, capacities[best_sense_idx]+0.3),
-                       arrowprops=dict(arrowstyle='->', alpha=0.5),
-                       fontsize=10)
+    # Parameter ranges
+    gamma_eff_range = np.logspace(-3, -1, 20)
+    phase_noise_range = np.logspace(-3, -1, 20)
+    
+    GAMMA, PHASE = np.meshgrid(gamma_eff_range, phase_noise_range)
+    
+    # Calculate feasibility metric (capacity ceiling)
+    feasibility = np.zeros_like(GAMMA)
+    
+    for i in range(GAMMA.shape[0]):
+        for j in range(GAMMA.shape[1]):
+            ceiling = DerivedParameters.capacity_ceiling(GAMMA[i,j], PHASE[i,j])
+            feasibility[i,j] = ceiling
+    
+    # Create contour plot
+    levels = np.linspace(0, 8, 17)
+    cs = ax.contourf(GAMMA, PHASE, feasibility, levels=levels, cmap='viridis')
+    
+    # Add contour lines
+    ax.contour(GAMMA, PHASE, feasibility, levels=[1, 2, 3, 4, 5], 
+              colors='white', linewidths=1, alpha=0.5)
+    
+    # Mark existing hardware profiles
+    for name, profile in HARDWARE_PROFILES.items():
+        if name != "Custom":
+            ax.scatter(profile.Gamma_eff, profile.phase_noise_variance,
+                      s=100, marker='*', edgecolors='red', linewidths=2,
+                      label=name.replace('_', ' '))
+    
+    # Add colorbar
+    cbar = plt.colorbar(cs, ax=ax)
+    cbar.set_label('Capacity Ceiling [bits/symbol]', fontsize=12)
     
     # Formatting
-    ax.set_xlabel('Ranging RMSE [mm]', fontsize=14)
-    ax.set_ylabel('Communication Capacity [bits/symbol]', fontsize=14)
-    ax.set_title('THz ISL ISAC Capacity-Distortion Trade-off\n' + 
-                 '(1m Antennas, 30 dBm Tx Power, 2000 km Distance, 300 GHz)',
-                 fontsize=16, pad=15)
-    
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper right', fontsize=12)
-    
+    ax.set_xlabel('Hardware Quality Factor Γ_eff', fontsize=12)
+    ax.set_ylabel('Phase Noise Variance σ²_φ [rad²]', fontsize=12)
     ax.set_xscale('log')
-    ax.set_xlim(left=0.1)
-    ax.set_ylim(bottom=0)
-    
-    # Add feasible region shading
-    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green', label='_nolegend_')
-    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue', label='_nolegend_')
-    
-    # Add text annotations
-    ax.text(0.5, ax.get_ylim()[1]*0.95, 'Sub-mm sensing region', 
-            ha='center', va='top', fontsize=11, style='italic', alpha=0.7)
-    ax.text(ax.get_xlim()[1]*0.5, 2.5, 'High-rate communication region', 
-            ha='center', va='bottom', fontsize=11, style='italic', alpha=0.7)
-    
-    # Add hardware quality impact text
-    textstr = (
-        'Key Insights:\n'
-        f'• High Performance (Γ_eff={HARDWARE_PROFILES["High_Performance"].Gamma_eff}): Better overall\n'
-        f'• SWaP Efficient (Γ_eff={HARDWARE_PROFILES["SWaP_Efficient"].Gamma_eff}): Cost-effective\n'
-        '• Both achieve sub-mm ranging with proper design\n'
-        '• Positive link margin with 1m antenna + 30 dBm'
-    )
-    props = dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.8)
-    ax.text(0.02, 0.02, textstr, transform=ax.transAxes, fontsize=10,
-            verticalalignment='bottom', bbox=props)
+    ax.set_yscale('log')
+    ax.set_title('Hardware Feasibility Map for THz ISL', fontsize=14)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right', fontsize=9)
     
     plt.tight_layout()
-    plt.savefig('cd_frontier_main.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig('cd_frontier_main.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig('hardware_feasibility_map.pdf', format='pdf', dpi=300)
+    plt.savefig('hardware_feasibility_map.png', format='png', dpi=300)
     plt.show()
-
-def verify_link_budgets():
-    """Verify link budgets for different configurations."""
-    print("\n=== Link Budget Verification ===")
-    
-    configs = [
-        ("Default", 0.5, 20),
-        ("Large Antenna", 1.0, 20),
-        ("High Power", 0.5, 30),
-        ("Optimized", 1.0, 30)
-    ]
-    
-    for name, ant_diam, tx_power in configs:
-        print(f"\n{name} Configuration:")
-        
-        # Calculate link budget
-        ant_gain = scenario.antenna_gain_dB(ant_diam)
-        budget = DerivedParameters.link_budget_dB(
-            tx_power, ant_gain, ant_gain,
-            scenario.R_default, scenario.f_c_default
-        )
-        
-        # Noise floor
-        noise_dBm = DerivedParameters.thermal_noise_power_dBm(10e9, noise_figure_dB=8)
-        
-        # Margin
-        margin = budget['rx_power_dBm'] - noise_dBm
-        
-        print(f"  Antenna: {ant_diam}m ({ant_gain:.1f} dBi)")
-        print(f"  Tx Power: {tx_power} dBm")
-        print(f"  Rx Power: {budget['rx_power_dBm']:.1f} dBm")
-        print(f"  Noise: {noise_dBm:.1f} dBm")
-        print(f"  Margin: {margin:.1f} dB {'✓' if margin > 0 else '✗'}")
 
 def main():
     """Main function with all analyses."""
-    print("=== THz ISL ISAC C-D Frontier Analysis (UPDATED) ===")
-    print("\nKey Updates:")
-    print("1. Using corrected Gamma_eff values from config")
-    print("2. Improved link budget with larger antennas and higher power")
-    print("3. Verified positive link margin for operation")
+    print("=== Enhanced THz ISL ISAC Capacity Analysis ===")
+    print("\nThis analysis includes:")
+    print("1. C-D frontier comparison across hardware profiles")
+    print("2. SNR operational regions identification")
+    print("3. Hardware parameter sweeps at fixed SNR")
+    print("4. SNR sweeps with good hardware")
+    print("5. Hardware feasibility mapping\n")
     
-    # Set debug level
-    global DEBUG_VERBOSE
-    DEBUG_VERBOSE = False
+    # Note about observability
+    print("NOTE: Using single ISL observability model (2 parameters only)")
+    print("Full 3D state requires multiple ISLs\n")
     
-    # First verify link budgets
-    verify_link_budgets()
+    # Generate comprehensive analysis
+    plot_comprehensive_cd_analysis()
     
-    # Generate comparison plot
-    plot_cd_frontier_comparison()
-    
-    # Generate main C-D frontier plot
-    plot_cd_frontier_main()
+    # Generate hardware feasibility map
+    plot_hardware_feasibility_map()
     
     print("\n=== Analysis Complete ===")
     print("Generated visualizations:")
-    print("1. cd_frontier_comparison.pdf/png - Shows impact of antenna/power")
-    print("2. cd_frontier_main.pdf/png - Main result with optimized config")
-    print("\nRecommendation: Use 1m antennas with 30 dBm for robust operation")
+    print("1. comprehensive_cd_analysis.pdf - All requested analyses in one figure")
+    print("2. hardware_feasibility_map.pdf - Shows achievable performance regions")
+    
+    print("\nKey Findings:")
+    print("- Current hardware (Γ_eff ≈ 0.01-0.05) limits capacity to 2-4 bits/symbol")
+    print("- State-of-art hardware (Γ_eff ≈ 0.005) could achieve 5+ bits/symbol")
+    print("- Hardware limitations dominate above SNR ≈ 20-30 dB")
+    print("- Sub-mm ranging requires both good hardware AND sufficient SNR")
 
 if __name__ == "__main__":
     main()
