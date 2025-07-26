@@ -1,11 +1,115 @@
 #!/usr/bin/env python3
 """
-simulation_config.py - Enhanced version with extended hardware profiles
+simulation_config.py - IEEE Publication Style Configuration
 """
 
 import numpy as np
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
+import matplotlib.pyplot as plt
+
+# =============================================================================
+# IEEE PUBLICATION STYLE CONFIGURATION
+# =============================================================================
+class IEEEStyle:
+    """IEEE publication style settings for all plots."""
+    
+    # Font sizes (easily adjustable)
+    FONT_SIZES = {
+        'title': 16,        # Figure title
+        'label': 14,        # Axis labels
+        'tick': 12,         # Tick labels
+        'legend': 12,       # Legend text
+        'annotation': 11,   # Annotations
+        'text': 11,         # General text
+    }
+    
+    # Figure sizes for single column and double column
+    FIG_SIZES = {
+        'single': (3.5, 2.8),    # Single column (inches)
+        'double': (7.16, 4),     # Double column (inches)
+        'custom': (5, 4),        # Custom size
+        'large': (6, 4.5),       # Large single figure
+    }
+    
+    # Line and marker properties
+    LINE_PROPS = {
+        'linewidth': 2.0,
+        'markersize': 7,
+        'markeredgewidth': 1.5,
+        'markeredgecolor': 'white',
+    }
+    
+    # Grid properties
+    GRID_PROPS = {
+        'alpha': 0.3,
+        'linestyle': ':',
+        'linewidth': 0.8,
+    }
+    
+    @staticmethod
+    def setup():
+        """Setup matplotlib for IEEE publication style."""
+        # Use LaTeX-like fonts
+        plt.rcParams['font.family'] = 'serif'
+        plt.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif']
+        plt.rcParams['mathtext.fontset'] = 'dejavuserif'
+        
+        # Set default font sizes
+        plt.rcParams['font.size'] = IEEEStyle.FONT_SIZES['text']
+        plt.rcParams['axes.titlesize'] = IEEEStyle.FONT_SIZES['title']
+        plt.rcParams['axes.labelsize'] = IEEEStyle.FONT_SIZES['label']
+        plt.rcParams['xtick.labelsize'] = IEEEStyle.FONT_SIZES['tick']
+        plt.rcParams['ytick.labelsize'] = IEEEStyle.FONT_SIZES['tick']
+        plt.rcParams['legend.fontsize'] = IEEEStyle.FONT_SIZES['legend']
+        
+        # Set line and marker defaults
+        plt.rcParams['lines.linewidth'] = IEEEStyle.LINE_PROPS['linewidth']
+        plt.rcParams['lines.markersize'] = IEEEStyle.LINE_PROPS['markersize']
+        
+        # Set figure properties
+        plt.rcParams['figure.dpi'] = 300
+        plt.rcParams['savefig.dpi'] = 300
+        plt.rcParams['savefig.bbox'] = 'tight'
+        plt.rcParams['savefig.pad_inches'] = 0.05
+        
+        # Set axes properties
+        plt.rcParams['axes.linewidth'] = 1.0
+        plt.rcParams['axes.grid'] = True
+        plt.rcParams['grid.alpha'] = IEEEStyle.GRID_PROPS['alpha']
+        plt.rcParams['grid.linestyle'] = IEEEStyle.GRID_PROPS['linestyle']
+        
+        # Legend properties
+        plt.rcParams['legend.frameon'] = True
+        plt.rcParams['legend.framealpha'] = 0.9
+        plt.rcParams['legend.edgecolor'] = 'black'
+        plt.rcParams['legend.fancybox'] = False
+        
+        # Tick properties
+        plt.rcParams['xtick.direction'] = 'in'
+        plt.rcParams['ytick.direction'] = 'in'
+        plt.rcParams['xtick.major.size'] = 4
+        plt.rcParams['ytick.major.size'] = 4
+        
+        # Remove top and right spines
+        plt.rcParams['axes.spines.top'] = True
+        plt.rcParams['axes.spines.right'] = True
+    
+    @staticmethod
+    def get_colors():
+        """Get IEEE-friendly color palette."""
+        # High contrast colors suitable for B&W printing
+        return ['#0072BD', '#D95319', '#EDB120', '#7E2F8E', '#77AC30', '#4DBEEE']
+    
+    @staticmethod
+    def get_markers():
+        """Get distinct markers for different data series."""
+        return ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
+    
+    @staticmethod
+    def get_linestyles():
+        """Get line styles for different data series."""
+        return ['-', '--', '-.', ':', '-', '--', '-.', ':']
 
 # =============================================================================
 # PHYSICAL CONSTANTS (SI UNITS)
@@ -31,7 +135,7 @@ class ScenarioParameters:
     
     # Carrier frequency range [Hz]
     f_c_min: float = 100e9      # Minimum carrier frequency [Hz] (100 GHz)
-    f_c_max: float = 1000e9     # Maximum carrier frequency [Hz] (1 THz) - Extended!
+    f_c_max: float = 1000e9     # Maximum carrier frequency [Hz] (1 THz)
     f_c_default: float = 300e9  # Default carrier frequency [Hz] (300 GHz)
     
     # ISL geometry [meters]
@@ -45,10 +149,8 @@ class ScenarioParameters:
     a_rel_max: float = 100      # Maximum relative acceleration [m/s²]
     
     # Enhanced antenna parameters for THz
-    antenna_options: Dict[str, float] = None  # Will be set in __post_init__
-    
-    # Enhanced transmit power options
-    power_options: Dict[str, float] = None    # Will be set in __post_init__
+    antenna_options: Dict[str, float] = None
+    power_options: Dict[str, float] = None
     
     def __post_init__(self):
         """Initialize dictionaries after dataclass creation."""
@@ -63,13 +165,12 @@ class ScenarioParameters:
             "low": 10,         # 10 dBm (10 mW)
             "medium": 20,      # 20 dBm (100 mW)
             "high": 30,        # 30 dBm (1 W)
-            "maximum": 33      # 33 dBm (2 W) - practical limit
+            "maximum": 33      # 33 dBm (2 W)
         }
     
     # Antenna efficiency
-    eta_antenna: float = 0.65   # Enhanced for THz
+    eta_antenna: float = 0.65
     
-    # Derived antenna parameters
     def antenna_gain(self, diameter: float = None, frequency_hz: float = None) -> float:
         """Calculate antenna gain [linear] for given diameter and frequency."""
         if diameter is None:
@@ -97,27 +198,24 @@ class ScenarioParameters:
         return 2.77 / (theta_3dB ** 2)
 
 # =============================================================================
-# EXTENDED HARDWARE PROFILES
+# HARDWARE PROFILES
 # =============================================================================
 @dataclass
 class HardwareComponentSpecs:
     """Specifications for individual hardware components."""
     
-    # Power Amplifier
-    PA_technology: str          # Technology type
-    PA_EVM_percent: float       # PA Error Vector Magnitude [%]
-    PA_P_sat_dBm: float        # PA saturation power [dBm]
-    PA_efficiency: float        # Power-added efficiency
+    PA_technology: str
+    PA_EVM_percent: float
+    PA_P_sat_dBm: float
+    PA_efficiency: float
     
-    # Local Oscillator / PLL
-    LO_technology: str          # Technology type
-    LO_RMS_jitter_fs: float    # RMS timing jitter [femtoseconds]
-    LO_linewidth_Hz: float     # 3dB linewidth [Hz]
+    LO_technology: str
+    LO_RMS_jitter_fs: float
+    LO_linewidth_Hz: float
     
-    # ADC
-    ADC_technology: str         # Technology type
-    ADC_ENOB: float            # Effective Number of Bits
-    ADC_sampling_rate_Gsps: float  # Sampling rate [Gsamples/s]
+    ADC_technology: str
+    ADC_ENOB: float
+    ADC_sampling_rate_Gsps: float
 
 @dataclass
 class HardwareProfile:
@@ -125,21 +223,13 @@ class HardwareProfile:
     
     name: str
     description: str
-    
-    # Aggregate hardware quality factor
-    Gamma_eff: float           # Total hardware quality factor (EVM²)
-    
-    # Component-level contributions
-    Gamma_PA: float            # PA contribution to Gamma_eff
-    Gamma_LO: float            # LO contribution to Gamma_eff  
-    Gamma_ADC: float           # ADC contribution to Gamma_eff
-    
-    # Component specifications
+    Gamma_eff: float
+    Gamma_PA: float
+    Gamma_LO: float
+    Gamma_ADC: float
     components: HardwareComponentSpecs
-    
-    # System parameters
-    frame_duration_s: float    # Frame duration [seconds]
-    signal_bandwidth_Hz: float # Signal bandwidth [Hz]
+    frame_duration_s: float
+    signal_bandwidth_Hz: float
     
     @property
     def phase_noise_variance(self) -> float:
@@ -160,13 +250,12 @@ class HardwareProfile:
         """Total system EVM [%]."""
         return 100 * np.sqrt(self.Gamma_eff)
 
-# Extended hardware profiles with more options
+# Hardware profiles
 HARDWARE_PROFILES = {
-    # State-of-the-art profiles
     "State_of_Art": HardwareProfile(
         name="State_of_Art",
-        description="Best available technology (future projection)",
-        Gamma_eff=0.005,  # -23 dB EVM
+        description="Best available technology",
+        Gamma_eff=0.005,
         Gamma_PA=0.0045,
         Gamma_LO=2e-7,
         Gamma_ADC=8e-5,
@@ -177,16 +266,15 @@ HARDWARE_PROFILES = {
             PA_efficiency=0.20,
             LO_technology="Photonic Integration",
             LO_RMS_jitter_fs=10,
-            LO_linewidth_Hz=10e3,  # 10 kHz
+            LO_linewidth_Hz=10e3,
             ADC_technology="7nm CMOS",
             ADC_ENOB=7.0,
             ADC_sampling_rate_Gsps=40
         ),
-        frame_duration_s=1e-6,  # 1 μs
-        signal_bandwidth_Hz=50e9  # 50 GHz
+        frame_duration_s=1e-6,
+        signal_bandwidth_Hz=50e9
     ),
     
-    # Original profiles
     "High_Performance": HardwareProfile(
         name="High_Performance",
         description="III-V semiconductor based system",
@@ -233,11 +321,10 @@ HARDWARE_PROFILES = {
         signal_bandwidth_Hz=10e9
     ),
     
-    # Low-cost profile
     "Low_Cost": HardwareProfile(
         name="Low_Cost",
         description="Budget silicon solution",
-        Gamma_eff=0.05,  # -13 dB EVM
+        Gamma_eff=0.05,
         Gamma_PA=0.045,
         Gamma_LO=1e-5,
         Gamma_ADC=0.001,
@@ -253,15 +340,14 @@ HARDWARE_PROFILES = {
             ADC_ENOB=4.0,
             ADC_sampling_rate_Gsps=10
         ),
-        frame_duration_s=0.05e-6,  # Shorter to manage phase noise
+        frame_duration_s=0.05e-6,
         signal_bandwidth_Hz=5e9
     ),
     
-    # Custom profile for parameter sweeps
     "Custom": HardwareProfile(
         name="Custom",
-        description="Configurable profile for sweeps",
-        Gamma_eff=0.01,  # Will be modified during sweeps
+        description="Configurable profile",
+        Gamma_eff=0.01,
         Gamma_PA=0.009,
         Gamma_LO=4.3e-7,
         Gamma_ADC=1.7e-4,
@@ -283,31 +369,25 @@ HARDWARE_PROFILES = {
 }
 
 # =============================================================================
-# SIMULATION CONTROL PARAMETERS
+# SIMULATION CONTROL
 # =============================================================================
 @dataclass
 class SimulationControl:
     """Parameters controlling simulation execution."""
     
-    # SNR range for simulations
-    SNR_dB_min: float = -10     # Minimum SNR [dB]
-    SNR_dB_max: float = 50      # Maximum SNR [dB] - Extended!
-    SNR_dB_points: int = 61     # Number of SNR points
+    SNR_dB_min: float = -10
+    SNR_dB_max: float = 50
+    SNR_dB_points: int = 61
     
-    # Monte Carlo parameters
-    n_monte_carlo: int = 1000   # Number of MC iterations
-    n_pilots: int = 64          # Number of pilot symbols (M in manuscript)
+    n_monte_carlo: int = 1000
+    n_pilots: int = 64
     
-    # Frequency sweep parameters  
-    f_c_sweep_points: int = 7   # More frequency points
-    
-    # Hardware parameter sweep
-    gamma_eff_sweep: List[float] = None  # Will be set in __post_init__
+    f_c_sweep_points: int = 7
+    gamma_eff_sweep: List[float] = None
     
     def __post_init__(self):
         """Initialize sweep arrays."""
-        # Logarithmic sweep of hardware quality factor
-        self.gamma_eff_sweep = np.logspace(-3, -1, 20).tolist()  # 0.001 to 0.1
+        self.gamma_eff_sweep = np.logspace(-3, -1, 20).tolist()
     
     @property
     def SNR_dB_array(self) -> np.ndarray:
@@ -320,7 +400,7 @@ class SimulationControl:
         return 10 ** (self.SNR_dB_array / 10)
 
 # =============================================================================
-# DERIVED PARAMETERS AND UTILITY FUNCTIONS
+# DERIVED PARAMETERS
 # =============================================================================
 class DerivedParameters:
     """Calculate derived parameters from base configuration."""
@@ -371,21 +451,13 @@ class DerivedParameters:
     @staticmethod
     def find_snr_for_hardware_limit(Gamma_eff: float, target_ratio: float = 0.95) -> float:
         """Find SNR where capacity reaches target_ratio of hardware ceiling."""
-        # For hardware-limited regime: SNR ≈ 1/Gamma_eff
-        # We want SNR where capacity = target_ratio * ceiling
-        # This occurs roughly when SNR = (1/Gamma_eff) / (1 - target_ratio)
         return 10 * np.log10((1/Gamma_eff) / (1 - target_ratio))
 
 # =============================================================================
-# OBSERVABLE PARAMETERS FOR SINGLE ISL
+# OBSERVABLE PARAMETERS
 # =============================================================================
 class ObservableParameters:
     """Define what can be observed with single ISL."""
-    
-    # Single ISL can only observe:
-    # 1. Range (radial distance)
-    # 2. Range-rate (radial velocity)
-    # Cannot observe: cross-track position/velocity, pointing errors
     
     observable_params = ["range", "range_rate"]
     unobservable_params = ["cross_track_position", "cross_track_velocity", "pointing_errors"]
@@ -411,7 +483,7 @@ class ObservableParameters:
         print("="*70 + "\n")
 
 # =============================================================================
-# DEFAULT CONFIGURATION INSTANCE
+# DEFAULT INSTANCES
 # =============================================================================
 scenario = ScenarioParameters()
 simulation = SimulationControl()
@@ -419,6 +491,10 @@ constants = PhysicalConstants()
 derived = DerivedParameters()
 observable = ObservableParameters()
 
-# Print observability warning on import
+# Setup IEEE style on import
+IEEEStyle.setup()
+
 if __name__ == "__main__":
-    observable.print_observability_warning()
+    print("IEEE Style Configuration Loaded")
+    print(f"Default font sizes: {IEEEStyle.FONT_SIZES}")
+    print(f"Available figure sizes: {list(IEEEStyle.FIG_SIZES.keys())}")

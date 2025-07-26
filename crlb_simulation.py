@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-crlb_simulation.py - Enhanced version with combined visualizations
+crlb_simulation.py - IEEE Publication Style with Individual Plots
 """
 
 import numpy as np
@@ -18,37 +18,22 @@ from simulation_config import (
     simulation,
     HARDWARE_PROFILES,
     DerivedParameters,
-    ObservableParameters
+    ObservableParameters,
+    IEEEStyle
 )
 
-# Set publication-quality plot defaults
-plt.style.use('seaborn-v0_8-paper')
-plt.rcParams.update({
-    'font.size': 11,
-    'axes.labelsize': 12,
-    'axes.titlesize': 14,
-    'legend.fontsize': 10,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'figure.figsize': (10, 8),
-    'figure.dpi': 300,
-    'savefig.dpi': 300,
-    'savefig.bbox': 'tight',
-    'lines.linewidth': 2,
-    'lines.markersize': 8,
-    'grid.alpha': 0.3,
-})
-
-colors = sns.color_palette("husl", 6)
+# Setup IEEE style
+IEEEStyle.setup()
+colors = IEEEStyle.get_colors()
+markers = IEEEStyle.get_markers()
+linestyles = IEEEStyle.get_linestyles()
 
 class EnhancedCRLBAnalyzer:
-    """Enhanced CRLB analyzer for single ISL with proper observability handling."""
+    """Enhanced CRLB analyzer for single ISL with IEEE publication style."""
     
     def __init__(self):
-        """Initialize analyzer and print observability warning."""
-        ObservableParameters.print_observability_warning()
+        """Initialize analyzer."""
         self.observable_dim = ObservableParameters.get_observable_dimension()
-        print(f"CRLB analysis will be performed for {self.observable_dim} observable parameters\n")
     
     def calculate_channel_gain(self, distance_m: float, frequency_Hz: float, 
                               antenna_diameter: float = 0.5) -> float:
@@ -91,18 +76,13 @@ class EnhancedCRLBAnalyzer:
         T_CPI: float = 1e-3, signal_power: float = 1.0
     ) -> Dict[str, float]:
         """Calculate BCRLB for observable parameters only."""
-        # Phase sensitivity for range
         phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
-        
-        # Doppler sensitivity for range-rate
         doppler_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2 * T_CPI**2)
         
-        # Common terms
         P_rx = signal_power * (channel_gain**2) * (B**2)
         noise_term = sigma_eff_sq / (M * P_rx)
         phase_penalty = np.exp(sigma_phi_sq)
         
-        # BCRLBs for observable parameters
         bcrlb_range = phase_term * noise_term * phase_penalty
         bcrlb_range_rate = doppler_term * noise_term * phase_penalty
         
@@ -111,233 +91,350 @@ class EnhancedCRLBAnalyzer:
             'range_rate': bcrlb_range_rate
         }
     
-    def find_operational_regions(self, snr_dB_array: np.ndarray, 
-                                gamma_eff_array: np.ndarray,
-                                f_c: float = 300e9) -> Dict[str, np.ndarray]:
-        """Identify operational regions in SNR-Gamma_eff space."""
-        SNR, GAMMA = np.meshgrid(snr_dB_array, gamma_eff_array)
-        
-        # Initialize region map
-        regions = np.zeros_like(SNR)
-        
-        for i in range(SNR.shape[0]):
-            for j in range(SNR.shape[1]):
-                snr_linear = 10**(SNR[i,j]/10)
-                gamma_eff = GAMMA[i,j]
-                
-                # Calculate hardware limit SNR
-                snr_hw_limit_dB = DerivedParameters.find_snr_for_hardware_limit(gamma_eff, 0.95)
-                
-                if SNR[i,j] < snr_hw_limit_dB - 10:
-                    regions[i,j] = 1  # Power-limited
-                elif SNR[i,j] > snr_hw_limit_dB:
-                    regions[i,j] = 3  # Hardware-limited
-                else:
-                    regions[i,j] = 2  # Transition
-                    
-        return {'SNR': SNR, 'GAMMA': GAMMA, 'regions': regions}
+    # =========================================================================
+    # INDIVIDUAL PLOT FUNCTIONS
+    # =========================================================================
     
-    def plot_combined_hardware_snr_analysis(self):
-        """Combined plot: Hardware sweep and SNR sweep in one figure."""
-        print("\n=== Generating Combined Hardware-SNR Analysis ===")
+    def plot_ranging_crlb_vs_snr(self, save_name='fig_ranging_crlb_vs_snr'):
+        """Plot ranging CRLB vs SNR for different frequencies - IEEE style."""
+        print(f"\n=== Generating {save_name} ===")
         
-        fig = plt.figure(figsize=(18, 10))
-        
-        # Left panel: Hardware parameter scan
-        ax1 = plt.subplot(2, 3, 1)
-        ax2 = plt.subplot(2, 3, 2)
-        ax3 = plt.subplot(2, 3, 4)
-        ax4 = plt.subplot(2, 3, 5)
-        
-        # Right panel: SNR scan
-        ax5 = plt.subplot(2, 3, (3, 6))
+        # Create figure with IEEE single column size
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
         
         # Parameters
-        f_c = 300e9
+        frequencies_GHz = [100, 300, 600]
+        frequencies_Hz = [f * 1e9 for f in frequencies_GHz]
+        hardware_profile = "High_Performance"
         antenna_diameter = 1.0
         tx_power_dBm = 30
         
-        # === Hardware parameter scan (left panels) ===
-        gamma_eff_range = np.logspace(-3, -1, 30)
-        fixed_snr_dB = [10, 20, 30, 40]
+        profile = HARDWARE_PROFILES[hardware_profile]
+        B = self.calculate_bussgang_gain()
         
-        axes_hw = [ax1, ax2, ax3, ax4]
-        for idx, (snr_dB, ax) in enumerate(zip(fixed_snr_dB, axes_hw)):
-            snr_linear = 10**(snr_dB/10)
-            
+        # Calculate for each frequency
+        for i, (f_GHz, f_Hz) in enumerate(zip(frequencies_GHz, frequencies_Hz)):
             ranging_rmse_mm = []
-            velocity_rmse_ms = []
-            capacity_bits = []
             
-            for gamma_eff in gamma_eff_range:
-                # Create temporary profile
-                temp_profile = HARDWARE_PROFILES["Custom"]
-                original_gamma = temp_profile.Gamma_eff
-                temp_profile.Gamma_eff = gamma_eff
+            for snr_dB in simulation.SNR_dB_array:
+                snr_linear = 10 ** (snr_dB / 10)
                 
-                # Calculate channel parameters
-                g = self.calculate_channel_gain(scenario.R_default, f_c, antenna_diameter)
-                B = self.calculate_bussgang_gain()
-                
-                # Calculate effective noise
+                g = self.calculate_channel_gain(scenario.R_default, f_Hz, antenna_diameter)
                 sigma_eff_sq, N_0 = self.calculate_effective_noise_variance(
-                    snr_linear, g, "Custom", tx_power_dBm=tx_power_dBm
+                    snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm
                 )
                 
-                # Calculate BCRLBs
                 bcrlbs = self.calculate_observable_bcrlb(
-                    f_c, sigma_eff_sq, simulation.n_pilots,
-                    g, B, temp_profile.phase_noise_variance
+                    f_Hz, sigma_eff_sq, simulation.n_pilots,
+                    g, B, profile.phase_noise_variance
                 )
                 
-                ranging_rmse_mm.append(np.sqrt(bcrlbs['range']) * 1000)
-                velocity_rmse_ms.append(np.sqrt(bcrlbs['range_rate']))
-                
-                # Calculate capacity
-                phase_factor = np.exp(-temp_profile.phase_noise_variance)
-                sinr_eff = snr_linear / (1 + snr_linear * gamma_eff)
-                capacity = np.log2(1 + sinr_eff * phase_factor)
-                capacity_bits.append(capacity)
-                
-                temp_profile.Gamma_eff = original_gamma
+                rmse_m = np.sqrt(bcrlbs['range'])
+                ranging_rmse_mm.append(rmse_m * 1000)
             
-            # Plot ranging performance
-            color = colors[idx % len(colors)]
-            ax.loglog(gamma_eff_range, ranging_rmse_mm, 
-                     color=color, linewidth=2.5, label=f'Range RMSE @ {snr_dB}dB')
-            
-            # Mark current hardware profiles
-            for name, profile in HARDWARE_PROFILES.items():
-                if name != "Custom":
-                    ax.axvline(x=profile.Gamma_eff, color='gray', 
-                              linestyle=':', alpha=0.5)
-            
-            # Add performance threshold
-            ax.axhline(y=1.0, color='green', linestyle=':', alpha=0.5)
-            
-            # Formatting
-            ax.set_xlabel('Γ_eff', fontsize=10)
-            ax.set_ylabel('Range RMSE [mm]', fontsize=10)
-            ax.set_title(f'SNR = {snr_dB} dB', fontsize=11)
-            ax.grid(True, alpha=0.3)
-            ax.legend(fontsize=8)
+            # Plot with IEEE style
+            ax.semilogy(simulation.SNR_dB_array, ranging_rmse_mm,
+                       color=colors[i], 
+                       linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                       marker=markers[i], 
+                       markersize=IEEEStyle.LINE_PROPS['markersize'],
+                       markevery=8,
+                       markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                       markerfacecolor='white',
+                       label=f'{f_GHz} GHz')
         
-        # === SNR scan (right panel) ===
-        snr_dB_extended = np.linspace(-10, 50, 61)
+        # Add performance thresholds
+        ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax.text(35, 1.2, '1 mm', fontsize=IEEEStyle.FONT_SIZES['annotation'], 
+                ha='center', color='gray')
         
-        for idx, (profile_name, profile) in enumerate(HARDWARE_PROFILES.items()):
-            if profile_name == "Custom":
-                continue
-                
-            ranging_rmse_mm = []
-            capacity_bits = []
+        # Labels and formatting
+        ax.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_title('Ranging Performance vs. SNR', fontsize=IEEEStyle.FONT_SIZES['title'])
+        
+        # Grid
+        ax.grid(True, **IEEEStyle.GRID_PROPS)
+        
+        # Legend
+        ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
+                 frameon=True, edgecolor='black', framealpha=0.9)
+        
+        # Axis limits
+        ax.set_xlim(-10, 50)
+        ax.set_ylim(1e-2, 1e3)
+        
+        # Tight layout
+        plt.tight_layout()
+        
+        # Save both PDF and PNG
+        plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Saved: {save_name}.pdf and {save_name}.png")
+    
+    def plot_hardware_comparison(self, save_name='fig_hardware_comparison'):
+        """Plot hardware profile comparison - IEEE style."""
+        print(f"\n=== Generating {save_name} ===")
+        
+        # Create figure with IEEE double column size
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=IEEEStyle.FIG_SIZES['double'])
+        
+        # Parameters
+        snr_dB_values = [10, 20, 30]
+        f_c_GHz = 300
+        f_c_Hz = f_c_GHz * 1e9
+        antenna_diameter = 1.0
+        tx_power_dBm = 30
+        
+        profiles = ["High_Performance", "SWaP_Efficient", "Low_Cost"]
+        
+        # Data storage
+        ranging_data = {profile: [] for profile in profiles}
+        velocity_data = {profile: [] for profile in profiles}
+        
+        for profile_name in profiles:
+            profile = HARDWARE_PROFILES[profile_name]
             
-            for snr_dB in snr_dB_extended:
+            g = self.calculate_channel_gain(scenario.R_default, f_c_Hz, antenna_diameter)
+            B = self.calculate_bussgang_gain()
+            
+            for snr_dB in snr_dB_values:
                 snr_linear = 10**(snr_dB/10)
-                
-                g = self.calculate_channel_gain(scenario.R_default, f_c, antenna_diameter)
-                B = self.calculate_bussgang_gain()
                 
                 sigma_eff_sq, N_0 = self.calculate_effective_noise_variance(
                     snr_linear, g, profile_name, tx_power_dBm=tx_power_dBm
                 )
                 
                 bcrlbs = self.calculate_observable_bcrlb(
-                    f_c, sigma_eff_sq, simulation.n_pilots,
+                    f_c_Hz, sigma_eff_sq, simulation.n_pilots,
                     g, B, profile.phase_noise_variance
                 )
                 
-                ranging_rmse_mm.append(np.sqrt(bcrlbs['range']) * 1000)
+                ranging_rmse_m = np.sqrt(bcrlbs['range'])
+                ranging_data[profile_name].append(ranging_rmse_m * 1000)
                 
-                # Calculate capacity
-                phase_factor = np.exp(-profile.phase_noise_variance)
-                sinr_eff = snr_linear / (1 + snr_linear * profile.Gamma_eff)
-                capacity = np.log2(1 + sinr_eff * phase_factor)
-                capacity_bits.append(capacity)
+                velocity_rmse_ms = np.sqrt(bcrlbs['range_rate'])
+                velocity_data[profile_name].append(velocity_rmse_ms)
+        
+        # Plot ranging RMSE
+        x = np.arange(len(snr_dB_values))
+        width = 0.25
+        
+        for i, profile_name in enumerate(profiles):
+            offset = (i - 1) * width
+            bars = ax1.bar(x + offset, ranging_data[profile_name], width,
+                           label=profile_name.replace('_', ' '),
+                           color=colors[i], alpha=0.8, edgecolor='black')
             
-            color = colors[idx % len(colors)]
-            ax5.semilogy(snr_dB_extended, ranging_rmse_mm,
-                        color=color, linewidth=2.5,
-                        label=f'{profile_name.replace("_", " ")} (Γ={profile.Gamma_eff})')
+            # Add value labels
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                ax1.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.1f}', ha='center', va='bottom', 
+                        fontsize=IEEEStyle.FONT_SIZES['annotation']-1)
+        
+        ax1.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax1.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax1.set_title('(a) Ranging Performance', fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(snr_dB_values)
+        ax1.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
+        ax1.grid(True, axis='y', **IEEEStyle.GRID_PROPS)
+        ax1.set_yscale('log')
+        
+        # Plot velocity RMSE
+        for i, profile_name in enumerate(profiles):
+            offset = (i - 1) * width
+            bars = ax2.bar(x + offset, velocity_data[profile_name], width,
+                           label=profile_name.replace('_', ' '),
+                           color=colors[i], alpha=0.8, edgecolor='black')
             
-            # Find and mark transition SNR
-            hw_limit_snr = DerivedParameters.find_snr_for_hardware_limit(
-                profile.Gamma_eff, 0.95
-            )
-            ax5.axvline(x=hw_limit_snr, color=color, linestyle=':', alpha=0.3)
+            # Add value labels
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                ax2.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.3f}', ha='center', va='bottom',
+                        fontsize=IEEEStyle.FONT_SIZES['annotation']-1)
         
-        # Add operational regions
-        ax5.axvspan(-10, 10, alpha=0.1, color='blue', label='Power-limited')
-        ax5.axvspan(30, 50, alpha=0.1, color='red', label='Hardware-limited')
-        ax5.axvspan(10, 30, alpha=0.1, color='yellow', label='Transition')
+        ax2.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax2.set_ylabel('Velocity RMSE (m/s)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax2.set_title('(b) Velocity Estimation', fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(snr_dB_values)
+        ax2.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
+        ax2.grid(True, axis='y', **IEEEStyle.GRID_PROPS)
+        ax2.set_yscale('log')
         
-        # Formatting
-        ax5.set_xlabel('SNR [dB]', fontsize=12)
-        ax5.set_ylabel('Ranging RMSE [mm]', fontsize=12)
-        ax5.set_title('Performance vs SNR for Different Hardware', fontsize=14)
-        ax5.grid(True, alpha=0.3)
-        ax5.legend(loc='upper right', fontsize=9)
-        ax5.set_ylim(1e-2, 1e3)
-        
-        # Add performance threshold
-        ax5.axhline(y=1.0, color='green', linestyle=':', alpha=0.5)
-        ax5.text(45, 1.2, 'Sub-mm', fontsize=10, color='green')
-        
-        plt.suptitle('THz ISL ISAC: Hardware Parameter Impact Analysis\n' +
-                    f'(f_c = {f_c/1e9:.0f} GHz, {antenna_diameter}m Antenna, {tx_power_dBm} dBm)',
-                    fontsize=16)
         plt.tight_layout()
-        plt.savefig('combined_hardware_snr_analysis.pdf', format='pdf', dpi=300)
-        plt.savefig('combined_hardware_snr_analysis.png', format='png', dpi=300)
-        plt.show()
+        plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Saved: {save_name}.pdf and {save_name}.png")
     
-    def plot_combined_operational_regions(self):
-        """Combined plot: 2D operational regions and frequency scaling."""
-        print("\n=== Generating Combined Operational Regions Analysis ===")
+    def plot_hardware_parameter_scan(self, save_name='fig_hardware_scan'):
+        """Plot performance vs hardware quality factor - IEEE style."""
+        print(f"\n=== Generating {save_name} ===")
         
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        # Create figure
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
         
-        # === Left: 2D Operational Regions ===
-        snr_dB_range = np.linspace(-10, 50, 30)
+        # Parameters
+        f_c = 300e9
+        antenna_diameter = 1.0
+        tx_power_dBm = 30
         gamma_eff_range = np.logspace(-3, -1, 30)
+        snr_levels_dB = [10, 20, 30, 40]
         
-        regions_data = self.find_operational_regions(snr_dB_range, gamma_eff_range)
+        for idx, snr_dB in enumerate(snr_levels_dB):
+            snr_linear = 10**(snr_dB/10)
+            ranging_rmse_mm = []
+            
+            for gamma_eff in gamma_eff_range:
+                temp_profile = HARDWARE_PROFILES["Custom"]
+                original_gamma = temp_profile.Gamma_eff
+                temp_profile.Gamma_eff = gamma_eff
+                
+                g = self.calculate_channel_gain(scenario.R_default, f_c, antenna_diameter)
+                B = self.calculate_bussgang_gain()
+                
+                sigma_eff_sq, N_0 = self.calculate_effective_noise_variance(
+                    snr_linear, g, "Custom", tx_power_dBm=tx_power_dBm
+                )
+                
+                bcrlbs = self.calculate_observable_bcrlb(
+                    f_c, sigma_eff_sq, simulation.n_pilots,
+                    g, B, temp_profile.phase_noise_variance
+                )
+                
+                ranging_rmse_mm.append(np.sqrt(bcrlbs['range']) * 1000)
+                temp_profile.Gamma_eff = original_gamma
+            
+            # Plot
+            ax.loglog(gamma_eff_range, ranging_rmse_mm,
+                     color=colors[idx], 
+                     linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                     linestyle=linestyles[idx],
+                     marker=markers[idx],
+                     markersize=IEEEStyle.LINE_PROPS['markersize'],
+                     markevery=6,
+                     markerfacecolor='white',
+                     markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                     label=f'SNR = {snr_dB} dB')
+        
+        # Mark current hardware profiles
+        for name, profile in HARDWARE_PROFILES.items():
+            if name not in ["Custom", "State_of_Art"]:
+                ax.axvline(x=profile.Gamma_eff, color='gray', 
+                          linestyle=':', alpha=0.5, linewidth=1.2)
+                ax.text(profile.Gamma_eff*1.1, 0.05, name.split('_')[0],
+                       rotation=90, fontsize=IEEEStyle.FONT_SIZES['annotation']-1,
+                       alpha=0.7, va='bottom')
+        
+        # Performance threshold
+        ax.axhline(y=1.0, color='green', linestyle='--', alpha=0.5, linewidth=1.5)
+        ax.text(2e-3, 1.2, 'Sub-mm threshold', 
+               fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
+        
+        # Labels
+        ax.set_xlabel('Hardware Quality Factor $\Gamma_{eff}$', 
+                     fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_title('Impact of Hardware Quality on Ranging Performance',
+                    fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax.grid(True, **IEEEStyle.GRID_PROPS)
+        ax.legend(loc='upper left', fontsize=IEEEStyle.FONT_SIZES['legend'])
+        ax.set_xlim(1e-3, 1e-1)
+        ax.set_ylim(1e-2, 1e2)
+        
+        plt.tight_layout()
+        plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Saved: {save_name}.pdf and {save_name}.png")
+    
+    def plot_operational_regions(self, save_name='fig_operational_regions'):
+        """Plot 2D operational regions map - IEEE style."""
+        print(f"\n=== Generating {save_name} ===")
+        
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+        
+        # Parameter ranges
+        snr_dB_range = np.linspace(-10, 50, 40)
+        gamma_eff_range = np.logspace(-3, -1, 40)
+        
+        SNR, GAMMA = np.meshgrid(snr_dB_range, gamma_eff_range)
+        regions = np.zeros_like(SNR)
+        
+        # Calculate regions
+        for i in range(SNR.shape[0]):
+            for j in range(SNR.shape[1]):
+                gamma_eff = GAMMA[i,j]
+                snr_hw_limit = DerivedParameters.find_snr_for_hardware_limit(gamma_eff, 0.95)
+                
+                if SNR[i,j] < snr_hw_limit - 10:
+                    regions[i,j] = 1  # Power-limited
+                elif SNR[i,j] > snr_hw_limit:
+                    regions[i,j] = 3  # Hardware-limited
+                else:
+                    regions[i,j] = 2  # Transition
         
         # Create custom colormap
-        cmap = plt.cm.colors.ListedColormap(['white', 'blue', 'yellow', 'red'])
+        cmap = plt.cm.colors.ListedColormap(['white', '#3498db', '#f1c40f', '#e74c3c'])
         bounds = [0, 1.5, 2.5, 3.5]
         norm = plt.cm.colors.BoundaryNorm(bounds, cmap.N)
         
         # Plot regions
-        im = ax1.contourf(regions_data['SNR'], regions_data['GAMMA'], 
-                         regions_data['regions'],
-                         levels=bounds, cmap=cmap, norm=norm)
+        im = ax.contourf(SNR, GAMMA, regions, levels=bounds, cmap=cmap, norm=norm)
         
         # Add hardware profile lines
         for name, profile in HARDWARE_PROFILES.items():
             if name != "Custom":
-                ax1.axhline(y=profile.Gamma_eff, color='black', 
-                          linewidth=2, label=name.replace('_', ' '))
+                ax.axhline(y=profile.Gamma_eff, color='black', linewidth=2)
+                ax.text(45, profile.Gamma_eff*1.2, name.replace('_', ' '),
+                       fontsize=IEEEStyle.FONT_SIZES['annotation'], ha='center')
         
         # Add iso-capacity lines
         snr_vals = np.linspace(0, 50, 100)
-        for target_cap in [1, 2, 3, 4]:
+        for target_cap in [2, 4]:
             gamma_vals = 1 / (10**(snr_vals/10) * (2**target_cap - 1))
             mask = (gamma_vals >= 1e-3) & (gamma_vals <= 1e-1)
-            ax1.plot(snr_vals[mask], gamma_vals[mask], 'k--', alpha=0.3)
-            if np.any(mask):
-                idx = np.where(mask)[0][len(np.where(mask)[0])//2]
-                ax1.text(snr_vals[idx], gamma_vals[idx]*1.5, f'{target_cap} bit/s', 
-                       rotation=-45, fontsize=8, alpha=0.7)
+            ax.plot(snr_vals[mask], gamma_vals[mask], 'k--', alpha=0.3, linewidth=1)
         
-        ax1.set_xlabel('SNR [dB]', fontsize=12)
-        ax1.set_ylabel('Hardware Quality Factor Γ_eff', fontsize=12)
-        ax1.set_yscale('log')
-        ax1.set_title('Operational Regions Map', fontsize=14)
-        ax1.grid(True, alpha=0.3)
-        ax1.legend(loc='lower left', fontsize=8)
+        # Labels
+        ax.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Hardware Quality Factor $\Gamma_{eff}$', 
+                     fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_yscale('log')
+        ax.set_title('Operational Regions for THz ISL ISAC',
+                    fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax.grid(True, **IEEEStyle.GRID_PROPS)
         
-        # === Right: Frequency Scaling ===
+        # Add text labels
+        ax.text(5, 0.05, 'Power-Limited', ha='center', 
+               fontsize=IEEEStyle.FONT_SIZES['annotation'],
+               bbox=dict(boxstyle='round,pad=0.3', facecolor='#3498db', alpha=0.7))
+        ax.text(40, 0.005, 'Hardware-Limited', ha='center',
+               fontsize=IEEEStyle.FONT_SIZES['annotation'],
+               bbox=dict(boxstyle='round,pad=0.3', facecolor='#e74c3c', alpha=0.7))
+        
+        plt.tight_layout()
+        plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Saved: {save_name}.pdf and {save_name}.png")
+    
+    def plot_frequency_scaling(self, save_name='fig_frequency_scaling'):
+        """Plot frequency scaling analysis - IEEE style."""
+        print(f"\n=== Generating {save_name} ===")
+        
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+        
+        # Frequency range
         frequencies_GHz = np.array([100, 200, 300, 400, 500, 600, 800, 1000])
         frequencies_Hz = frequencies_GHz * 1e9
         
@@ -379,134 +476,101 @@ class EnhancedCRLBAnalyzer:
             
             ranging_rmse_mm.append(np.sqrt(bcrlbs['range']) * 1000)
         
-        # Plot on twin axes
-        ax2_twin = ax2.twinx()
+        # Create twin axis
+        ax2 = ax.twinx()
         
         # Plot ranging performance
         valid_mask = ~np.isnan(ranging_rmse_mm)
-        line1 = ax2.loglog(frequencies_GHz[valid_mask], 
-                          np.array(ranging_rmse_mm)[valid_mask],
-                          'b-', linewidth=3, marker='o', markersize=8, 
-                          label='Ranging RMSE')
+        line1 = ax.loglog(frequencies_GHz[valid_mask], 
+                         np.array(ranging_rmse_mm)[valid_mask],
+                         color=colors[0], 
+                         linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                         marker=markers[0], 
+                         markersize=IEEEStyle.LINE_PROPS['markersize'],
+                         markerfacecolor='white',
+                         markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                         label='Ranging RMSE')
         
-        # Add theoretical f^2 scaling
+        # Add theoretical scaling
         f_ref = 300
         rmse_ref = np.array(ranging_rmse_mm)[frequencies_GHz == f_ref][0]
         theoretical = rmse_ref * (f_ref / frequencies_GHz)**2
-        line2 = ax2.loglog(frequencies_GHz, theoretical, 'b--', linewidth=2, 
-                          alpha=0.5, label='f² scaling')
+        line2 = ax.loglog(frequencies_GHz, theoretical, 
+                         color=colors[0], linestyle='--', 
+                         linewidth=IEEEStyle.LINE_PROPS['linewidth']-0.5,
+                         label='$f^{-2}$ scaling')
         
         # Plot link margin
-        line3 = ax2_twin.plot(frequencies_GHz, link_margin_dB, 'r-', linewidth=2.5,
-                             marker='s', markersize=6, label='Link Margin')
+        line3 = ax2.plot(frequencies_GHz, link_margin_dB, 
+                        color=colors[1], 
+                        linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                        marker=markers[1], 
+                        markersize=IEEEStyle.LINE_PROPS['markersize'],
+                        markerfacecolor='white',
+                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                        label='Link Margin')
         
         # Add zero margin line
-        ax2_twin.axhline(y=0, color='red', linestyle=':', alpha=0.5)
+        ax2.axhline(y=0, color=colors[1], linestyle=':', alpha=0.5, linewidth=1.5)
         
         # Mark invalid regions
-        invalid_mask = np.array(link_margin_dB) < 0
-        if np.any(invalid_mask):
-            for f, valid in zip(frequencies_GHz, ~invalid_mask):
-                if not valid:
-                    ax2.axvspan(f*0.9, f*1.1, alpha=0.2, color='red')
+        for i, (f, valid) in enumerate(zip(frequencies_GHz, ~np.isnan(ranging_rmse_mm))):
+            if not valid:
+                ax.axvspan(f*0.9, f*1.1, alpha=0.2, color='red')
         
-        ax2.set_xlabel('Frequency [GHz]', fontsize=12)
-        ax2.set_ylabel('Ranging RMSE [mm]', fontsize=12, color='blue')
-        ax2_twin.set_ylabel('Link Margin [dB]', fontsize=12, color='red')
-        ax2.set_title('Frequency Scaling Analysis', fontsize=14)
-        ax2.grid(True, alpha=0.3)
-        ax2.set_xlim(90, 1100)
+        # Labels
+        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'], 
+                     color=colors[0])
+        ax2.set_ylabel('Link Margin (dB)', fontsize=IEEEStyle.FONT_SIZES['label'], 
+                      color=colors[1])
+        ax.set_title('Frequency Scaling of Ranging Performance',
+                    fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax.grid(True, **IEEEStyle.GRID_PROPS)
+        ax.set_xlim(90, 1100)
         
         # Color the axes
-        ax2.tick_params(axis='y', labelcolor='blue')
-        ax2_twin.tick_params(axis='y', labelcolor='red')
+        ax.tick_params(axis='y', labelcolor=colors[0])
+        ax2.tick_params(axis='y', labelcolor=colors[1])
         
         # Combined legend
         lines = line1 + line2 + line3
         labels = [l.get_label() for l in lines]
-        ax2.legend(lines, labels, loc='upper right')
+        ax.legend(lines, labels, loc='upper right', 
+                 fontsize=IEEEStyle.FONT_SIZES['legend'])
         
-        plt.suptitle('THz ISL ISAC: Operational Regions and Frequency Scaling',
-                    fontsize=16)
         plt.tight_layout()
-        plt.savefig('combined_operational_analysis.pdf', format='pdf', dpi=300)
-        plt.savefig('combined_operational_analysis.png', format='png', dpi=300)
-        plt.show()
-    
-    def generate_summary_table(self):
-        """Generate summary table of key results."""
-        print("\n=== Performance Summary Table ===")
-        print("-" * 100)
-        print(f"{'Profile':<20} {'Gamma_eff':<12} {'Range@20dB':<15} {'Velocity@20dB':<15} {'Cap Ceiling':<12} {'HW Limit SNR':<12}")
-        print(f"{'':20} {'':12} {'[mm]':<15} {'[m/s]':<15} {'[bits/sym]':<12} {'[dB]':<12}")
-        print("-" * 100)
+        plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
         
-        # Fixed parameters
-        snr_dB = 20
-        snr_linear = 10**(snr_dB/10)
-        f_c = 300e9
-        antenna_diameter = 1.0
-        
-        for name, profile in HARDWARE_PROFILES.items():
-            if name == "Custom":
-                continue
-                
-            # Calculate performance
-            g = self.calculate_channel_gain(scenario.R_default, f_c, antenna_diameter)
-            B = self.calculate_bussgang_gain()
-            
-            sigma_eff_sq, _ = self.calculate_effective_noise_variance(
-                snr_linear, g, name, tx_power_dBm=30
-            )
-            
-            bcrlbs = self.calculate_observable_bcrlb(
-                f_c, sigma_eff_sq, simulation.n_pilots,
-                g, B, profile.phase_noise_variance
-            )
-            
-            range_rmse_mm = np.sqrt(bcrlbs['range']) * 1000
-            velocity_rmse_ms = np.sqrt(bcrlbs['range_rate'])
-            
-            ceiling = DerivedParameters.capacity_ceiling(
-                profile.Gamma_eff, profile.phase_noise_variance
-            )
-            
-            hw_limit_snr = DerivedParameters.find_snr_for_hardware_limit(
-                profile.Gamma_eff, 0.95
-            )
-            
-            print(f"{name:<20} {profile.Gamma_eff:<12.4f} {range_rmse_mm:<15.3f} "
-                  f"{velocity_rmse_ms:<15.4f} {ceiling:<12.2f} {hw_limit_snr:<12.1f}")
-        
-        print("-" * 100)
+        print(f"Saved: {save_name}.pdf and {save_name}.png")
 
 def main():
-    """Main function to run all enhanced CRLB analyses."""
-    print("=== Enhanced THz ISL ISAC CRLB Analysis (Combined Visualizations) ===")
-    print("\nThis analysis addresses:")
-    print("1. Single ISL observability limitations (only 2 observable parameters)")
-    print("2. Comprehensive hardware parameter scanning")
-    print("3. Extended SNR range analysis")
-    print("4. Operational region identification")
-    print("5. Frequency scaling effects\n")
+    """Main function to generate all CRLB analysis plots."""
+    print("=== THz ISL ISAC CRLB Analysis (IEEE Style) ===")
+    print("\nGenerating individual plots with adjustable font sizes...")
+    print(f"Current font sizes: {IEEEStyle.FONT_SIZES}")
+    
+    # Print observability warning once
+    ObservableParameters.print_observability_warning()
     
     analyzer = EnhancedCRLBAnalyzer()
     
-    # Generate combined analyses
-    analyzer.plot_combined_hardware_snr_analysis()
-    analyzer.plot_combined_operational_regions()
-    analyzer.generate_summary_table()
+    # Generate all individual plots
+    analyzer.plot_ranging_crlb_vs_snr()
+    analyzer.plot_hardware_comparison()
+    analyzer.plot_hardware_parameter_scan()
+    analyzer.plot_operational_regions()
+    analyzer.plot_frequency_scaling()
     
-    print("\n=== Analysis Complete ===")
-    print("Generated visualizations:")
-    print("1. combined_hardware_snr_analysis.png - Hardware parameter scan + SNR sweep")
-    print("2. combined_operational_analysis.png - 2D regions + frequency scaling")
-    
-    print("\nKey Insights:")
-    print("- Single ISL can only estimate range and range-rate (2 DOF)")
-    print("- Hardware limitations dominate above SNR ≈ 10/Gamma_eff dB")
-    print("- Sub-mm ranging requires Gamma_eff < 0.01 at reasonable SNR")
-    print("- Frequency scaling provides f² improvement but limited by link budget")
+    print("\n=== CRLB Analysis Complete ===")
+    print("Generated files:")
+    print("- fig_ranging_crlb_vs_snr.pdf/png")
+    print("- fig_hardware_comparison.pdf/png")
+    print("- fig_hardware_scan.pdf/png")
+    print("- fig_operational_regions.pdf/png")
+    print("- fig_frequency_scaling.pdf/png")
 
 if __name__ == "__main__":
     main()
