@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 capacity_simulation.py - IEEE Publication Style with Individual Plots
-Updated with pointing error model and improved 2D visualizations
+Updated with data saving, 3D plots, and 1THz support
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.patches import Patch, Rectangle
+from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 from typing import Tuple, Dict, List
 from scipy.linalg import inv
@@ -22,7 +23,8 @@ from simulation_config import (
     HARDWARE_PROFILES,
     DerivedParameters,
     ObservableParameters,
-    IEEEStyle
+    IEEEStyle,
+    data_saver
 )
 
 # Setup IEEE style
@@ -36,15 +38,15 @@ class EnhancedISACSystem:
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
                  distance: float = 2000e3, n_pilots: int = 64,
-                 antenna_diameter: float = 1.0,
-                 tx_power_dBm: float = 30):
+                 antenna_diameter: float = None,
+                 tx_power_dBm: float = None):
         """Initialize with enhanced parameters."""
         self.profile = HARDWARE_PROFILES[hardware_profile]
         self.f_c = f_c
         self.distance = distance
         self.n_pilots = n_pilots
-        self.antenna_diameter = antenna_diameter
-        self.tx_power_dBm = tx_power_dBm
+        self.antenna_diameter = antenna_diameter or scenario.default_antenna_diameter
+        self.tx_power_dBm = tx_power_dBm or scenario.default_tx_power_dBm
         
         # Calculate system parameters
         self.lambda_c = PhysicalConstants.c / f_c
@@ -238,9 +240,14 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     """Plot C-D frontier for all hardware profiles - IEEE style."""
     print(f"\n=== Generating {save_name} ===")
     
-    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
     profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
+    
+    # Data storage
+    data_to_save = {
+        'hardware_profiles': profiles_to_plot
+    }
     
     for idx, profile_name in enumerate(profiles_to_plot):
         if profile_name not in HARDWARE_PROFILES:
@@ -272,6 +279,9 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         if len(distortions) > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000
             
+            data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
+            data_to_save[f'capacity_{profile_name}'] = capacities
+            
             profile = HARDWARE_PROFILES[profile_name]
             
             ax.plot(ranging_rmse_mm, capacities,
@@ -293,7 +303,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
     
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(0.8, 3.5, 'Sub-mm\nsensing', ha='right',
+    ax.text(0.8, ax.get_ylim()[1]*0.7, 'Sub-mm\nsensing', ha='right',
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
     
     # Labels
@@ -305,23 +315,32 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
     ax.set_xlim(left=0.01)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=ax.get_ylim()[1]*1.1)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
     plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+    data_saver.save_data(save_name, data_to_save,
+                       "Capacity-Distortion frontier for all hardware profiles")
+    
+    print(f"Saved: results/{save_name}.pdf/png and data")
 
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     """Plot capacity vs SNR for all hardware profiles - IEEE style."""
     print(f"\n=== Generating {save_name} ===")
     
-    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
     profiles = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
-    snr_dB_array = np.linspace(-10, 50, 60)
+    snr_dB_array = np.linspace(-10, 60, 71)
+    
+    # Data storage
+    data_to_save = {
+        'snr_dB': snr_dB_array.tolist(),
+        'hardware_profiles': profiles
+    }
     
     for idx, profile_name in enumerate(profiles):
         if profile_name not in HARDWARE_PROFILES:
@@ -330,6 +349,9 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
         print(f"  Processing {profile_name}...")
         system = EnhancedISACSystem(profile_name)
         results = system.calculate_capacity_vs_snr(snr_dB_array, n_mc=100)
+        
+        data_to_save[f'capacity_{profile_name}'] = results['capacity'].tolist()
+        data_to_save[f'ceiling_{profile_name}'] = results['ceiling']
         
         # Plot capacity
         ax.plot(snr_dB_array, results['capacity'], 
@@ -351,10 +373,10 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     
     # Add regions
     ax.axvspan(-10, 10, alpha=0.1, color='blue')
-    ax.axvspan(30, 50, alpha=0.1, color='red')
+    ax.axvspan(40, 60, alpha=0.1, color='red')
     ax.text(0, 0.5, 'Power\nLimited', ha='center', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'])
-    ax.text(40, 0.5, 'Hardware\nLimited', ha='center', 
+    ax.text(50, 0.5, 'Hardware\nLimited', ha='center', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'])
     
     # Labels
@@ -364,34 +386,42 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='lower right', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    ax.set_ylim(0, 8)
-    ax.set_xlim(-10, 50)
+    ax.set_ylim(0, 10)
+    ax.set_xlim(-10, 60)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
     plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+    data_saver.save_data(save_name, data_to_save,
+                       "Capacity vs SNR for all hardware profiles")
+    
+    print(f"Saved: results/{save_name}.pdf/png and data")
 
-def plot_2d_performance_analysis(save_name='fig_2d_performance_analysis'):
-    """Plot 2D performance analysis instead of 3D landscape - NEW."""
+def plot_capacity_vs_frequency(save_name='fig_capacity_vs_frequency'):
+    """Plot capacity vs frequency at different distances."""
     print(f"\n=== Generating {save_name} ===")
     
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
-    # Common parameters
+    # Parameters
+    frequencies_GHz = simulation.frequency_sweep_GHz
+    distances_km = [500, 1000, 2000, 5000]
     hardware_profile = "High_Performance"
     
-    # 1. Capacity vs Frequency (different distances)
-    frequencies_GHz = np.linspace(100, 600, 20)
-    distances_km = [500, 1000, 2000, 5000]
+    # Data storage
+    data_to_save = {
+        'frequency_GHz': frequencies_GHz.tolist(),
+        'distances_km': distances_km,
+        'hardware_profile': hardware_profile
+    }
     
     for idx, d_km in enumerate(distances_km):
         capacities = []
         print(f"  Processing distance {d_km} km...")
         
-        for f_GHz in frequencies_GHz:
+        for f_GHz in tqdm(frequencies_GHz, desc=f"    Frequency sweep", leave=False):
             system = EnhancedISACSystem(
                 hardware_profile, f_c=f_GHz*1e9, distance=d_km*1e3
             )
@@ -399,26 +429,62 @@ def plot_2d_performance_analysis(save_name='fig_2d_performance_analysis'):
             I_x = system.calculate_mutual_information(p_x, n_mc=50)
             capacities.append(np.mean(I_x))
         
-        ax1.plot(frequencies_GHz, capacities, 
-                color=colors[idx], linewidth=2,
-                marker=markers[idx], markersize=5, markevery=5,
+        data_to_save[f'capacity_{d_km}km'] = capacities
+        
+        ax.plot(frequencies_GHz, capacities, 
+                color=colors[idx], linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                marker=markers[idx], markersize=IEEEStyle.LINE_PROPS['markersize'],
+                markevery=2, markerfacecolor='white',
+                markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                 label=f'{d_km} km')
     
-    ax1.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax1.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax1.set_title('(a) Capacity vs. Frequency', fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax1.grid(True, **IEEEStyle.GRID_PROPS)
-    ax1.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
-    ax1.set_ylim(bottom=0)
+    # Highlight 1THz
+    ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
+    ax.text(1000, ax.get_ylim()[1]*0.95, '1 THz', 
+           ha='center', fontsize=IEEEStyle.FONT_SIZES['annotation'], color='red')
     
-    # 2. Capacity vs Distance (different frequencies)
+    ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_title('Capacity vs. Frequency at Different Distances', 
+                fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax.grid(True, **IEEEStyle.GRID_PROPS)
+    ax.legend(fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.set_ylim(bottom=0, top=ax.get_ylim()[1]*1.1)
+    ax.set_xlim(50, 1100)
+    
+    plt.tight_layout()
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    data_saver.save_data(save_name, data_to_save,
+                       "Capacity vs frequency at different distances")
+    
+    print(f"Saved: results/{save_name}.pdf/png and data")
+
+def plot_capacity_vs_distance(save_name='fig_capacity_vs_distance'):
+    """Plot capacity vs distance at different frequencies."""
+    print(f"\n=== Generating {save_name} ===")
+    
+    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
+    
+    # Parameters
     distances_km = np.linspace(500, 5000, 20)
-    frequencies_GHz = [100, 200, 300, 600]
+    frequencies_GHz = [100, 300, 600, 1000]
+    hardware_profile = "High_Performance"
+    
+    # Data storage
+    data_to_save = {
+        'distance_km': distances_km.tolist(),
+        'frequencies_GHz': frequencies_GHz,
+        'hardware_profile': hardware_profile
+    }
     
     for idx, f_GHz in enumerate(frequencies_GHz):
         capacities = []
+        print(f"  Processing frequency {f_GHz} GHz...")
         
-        for d_km in distances_km:
+        for d_km in tqdm(distances_km, desc=f"    Distance sweep", leave=False):
             system = EnhancedISACSystem(
                 hardware_profile, f_c=f_GHz*1e9, distance=d_km*1e3
             )
@@ -426,153 +492,194 @@ def plot_2d_performance_analysis(save_name='fig_2d_performance_analysis'):
             I_x = system.calculate_mutual_information(p_x, n_mc=50)
             capacities.append(np.mean(I_x))
         
-        ax2.plot(distances_km, capacities, 
-                color=colors[idx], linewidth=2,
-                marker=markers[idx], markersize=5, markevery=5,
+        data_to_save[f'capacity_{f_GHz}GHz'] = capacities
+        
+        ax.plot(distances_km, capacities, 
+                color=colors[idx], linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                marker=markers[idx], markersize=IEEEStyle.LINE_PROPS['markersize'],
+                markevery=4, markerfacecolor='white',
+                markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                 label=f'{f_GHz} GHz')
     
-    ax2.set_xlabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax2.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax2.set_title('(b) Capacity vs. Distance', fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax2.grid(True, **IEEEStyle.GRID_PROPS)
-    ax2.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
-    ax2.set_ylim(bottom=0)
+    ax.set_xlabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_title('Capacity vs. Distance at Different Frequencies', 
+                fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax.grid(True, **IEEEStyle.GRID_PROPS)
+    ax.legend(fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.set_ylim(bottom=0, top=ax.get_ylim()[1]*1.1)
     
-    # 3. RMSE vs Frequency (different SNRs)
-    frequencies_GHz = np.linspace(100, 600, 20)
-    snr_dB_values = [10, 20, 30, 40]
-    
-    for idx, snr_dB in enumerate(snr_dB_values):
-        rmse_values = []
-        
-        for f_GHz in frequencies_GHz:
-            system = EnhancedISACSystem(hardware_profile, f_c=f_GHz*1e9)
-            # Simplified RMSE calculation
-            snr_linear = 10**(snr_dB/10)
-            phase_sensitivity = (2 * np.pi * f_GHz*1e9 / PhysicalConstants.c)**2
-            crlb = 1 / (2 * system.n_pilots * snr_linear * phase_sensitivity)
-            rmse_mm = np.sqrt(crlb) * 1000
-            rmse_values.append(rmse_mm)
-        
-        ax3.semilogy(frequencies_GHz, rmse_values, 
-                    color=colors[idx], linewidth=2,
-                    marker=markers[idx], markersize=5, markevery=5,
-                    label=f'{snr_dB} dB')
-    
-    ax3.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax3.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax3.set_title('(c) RMSE vs. Frequency', fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax3.grid(True, **IEEEStyle.GRID_PROPS)
-    ax3.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
-    ax3.set_ylim(1e-3, 1e2)
-    
-    # 4. RMSE vs SNR (different frequencies)
-    snr_dB_array = np.linspace(0, 40, 20)
-    frequencies_GHz = [100, 200, 300, 600]
-    
-    for idx, f_GHz in enumerate(frequencies_GHz):
-        rmse_values = []
-        
-        for snr_dB in snr_dB_array:
-            system = EnhancedISACSystem(hardware_profile, f_c=f_GHz*1e9)
-            snr_linear = 10**(snr_dB/10)
-            phase_sensitivity = (2 * np.pi * f_GHz*1e9 / PhysicalConstants.c)**2
-            crlb = 1 / (2 * system.n_pilots * snr_linear * phase_sensitivity)
-            rmse_mm = np.sqrt(crlb) * 1000
-            rmse_values.append(rmse_mm)
-        
-        ax4.semilogy(snr_dB_array, rmse_values, 
-                    color=colors[idx], linewidth=2,
-                    marker=markers[idx], markersize=5, markevery=5,
-                    label=f'{f_GHz} GHz')
-    
-    ax4.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax4.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax4.set_title('(d) RMSE vs. SNR', fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax4.grid(True, **IEEEStyle.GRID_PROPS)
-    ax4.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
-    ax4.set_ylim(1e-3, 1e2)
-    
-    plt.suptitle('THz ISL ISAC Performance Analysis', fontsize=IEEEStyle.FONT_SIZES['title']+2)
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
     plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+    data_saver.save_data(save_name, data_to_save,
+                       "Capacity vs distance at different frequencies")
+    
+    print(f"Saved: results/{save_name}.pdf/png and data")
 
-def plot_performance_summary(save_name='fig_performance_summary'):
-    """Plot performance summary comparison without bar value labels."""
+def plot_hardware_quality_impact(save_name='fig_hardware_quality_impact'):
+    """Plot capacity vs hardware quality factor - IEEE style."""
     print(f"\n=== Generating {save_name} ===")
     
-    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
-    profiles = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
+    gamma_eff_range = np.logspace(-3, -1, 30)
+    snr_levels_dB = [20, 30, 40, 50]
     
-    # Calculate metrics at SNR = 20 dB
-    ranging_rmse = []
-    capacity = []
-    hw_limit_snr = []
+    # Data storage
+    data_to_save = {
+        'gamma_eff': gamma_eff_range.tolist(),
+        'snr_levels_dB': snr_levels_dB
+    }
     
-    for profile_name in profiles:
-        if profile_name not in HARDWARE_PROFILES:
-            continue
+    for idx, snr_dB in enumerate(snr_levels_dB):
+        capacities = []
+        
+        for gamma_eff in gamma_eff_range:
+            custom_profile = HARDWARE_PROFILES["Custom"]
+            original_gamma = custom_profile.Gamma_eff
+            custom_profile.Gamma_eff = gamma_eff
             
-        profile = HARDWARE_PROFILES[profile_name]
+            snr_linear = 10**(snr_dB/10)
+            phase_factor = np.exp(-custom_profile.phase_noise_variance)
+            sinr_eff = snr_linear / (1 + snr_linear * gamma_eff)
+            capacity = np.log2(1 + sinr_eff * phase_factor)
+            capacities.append(capacity)
+            
+            custom_profile.Gamma_eff = original_gamma
         
-        # Simplified calculations
-        snr_linear = 100  # 20 dB
-        f_c = 300e9
+        data_to_save[f'capacity_snr{snr_dB}dB'] = capacities
         
-        # Include pointing error effect
-        pointing_loss = scenario.calculate_pointing_loss_factor(f_c, 1.0)
-        
-        rmse = 1000 * np.sqrt(1 / (snr_linear * (f_c/3e8)**2 * profile.Gamma_eff**(-1) * pointing_loss))
-        ranging_rmse.append(rmse)
-        
-        cap = np.log2(1 + snr_linear / (1 + snr_linear * profile.Gamma_eff))
-        capacity.append(cap)
-        
-        hw_snr = DerivedParameters.find_snr_for_hardware_limit(profile.Gamma_eff, 0.95)
-        hw_limit_snr.append(hw_snr)
+        ax.semilogx(gamma_eff_range, capacities, 
+                   color=colors[idx],
+                   linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                   linestyle=linestyles[idx],
+                   marker=markers[idx],
+                   markersize=IEEEStyle.LINE_PROPS['markersize']-1,
+                   markevery=6,
+                   markerfacecolor='white',
+                   markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                   label=f'SNR = {snr_dB} dB')
     
-    # Create grouped bar chart
-    x = np.arange(len(profiles))
-    width = 0.25
-    
-    # Normalize metrics for display
-    ranging_norm = np.array(ranging_rmse) / max(ranging_rmse)
-    capacity_norm = np.array(capacity) / max(capacity)
-    hw_snr_norm = np.array(hw_limit_snr) / max(hw_limit_snr)
-    
-    bars1 = ax.bar(x - width, ranging_norm, width, 
-                   label='Ranging RMSE', color=colors[0], 
-                   alpha=0.8, edgecolor='black', linewidth=1)
-    bars2 = ax.bar(x, capacity_norm, width, 
-                   label='Capacity', color=colors[1], 
-                   alpha=0.8, edgecolor='black', linewidth=1)
-    bars3 = ax.bar(x + width, hw_snr_norm, width, 
-                   label='HW Limit SNR', color=colors[2], 
-                   alpha=0.8, edgecolor='black', linewidth=1)
+    # Mark existing hardware
+    for name, profile in HARDWARE_PROFILES.items():
+        if name != "Custom":
+            ax.axvline(x=profile.Gamma_eff, color='gray', 
+                      linestyle=':', alpha=0.5, linewidth=1.2)
+            ax.text(profile.Gamma_eff*1.1, ax.get_ylim()[1]*0.95, 
+                   name.split('_')[0], rotation=90, 
+                   fontsize=IEEEStyle.FONT_SIZES['annotation']-1, alpha=0.7, va='top')
     
     # Labels
-    ax.set_xlabel('Hardware Profile', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Normalized Performance', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Performance Summary at SNR = 20 dB',
+    ax.set_xlabel('Hardware Quality Factor $\Gamma_{eff}$',
+                 fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_title('Impact of Hardware Quality on Capacity',
                 fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax.set_xticks(x)
-    ax.set_xticklabels([p.replace('_', '\n') for p in profiles], 
-                      fontsize=IEEEStyle.FONT_SIZES['tick'])
-    ax.legend(loc='upper left', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    ax.set_ylim(0, 1.2)
-    ax.grid(True, axis='y', **IEEEStyle.GRID_PROPS)
+    ax.grid(True, **IEEEStyle.GRID_PROPS)
+    ax.legend(loc='lower left', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.set_ylim(0, 10)
+    ax.set_xlim(1e-3, 1e-1)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
     plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+    data_saver.save_data(save_name, data_to_save,
+                       "Hardware quality impact on capacity")
+    
+    print(f"Saved: results/{save_name}.pdf/png and data")
+
+def plot_3d_capacity_landscape(save_name='fig_3d_capacity_landscape'):
+    """Plot 3D capacity landscape with multiple viewing angles."""
+    print(f"\n=== Generating {save_name} ===")
+    
+    # Parameter ranges
+    frequencies_GHz = np.linspace(100, 1000, 15)
+    distances_km = np.linspace(500, 5000, 15)
+    
+    # Create meshgrid
+    F, D = np.meshgrid(frequencies_GHz, distances_km)
+    
+    # Fixed parameters
+    hardware_profile = "High_Performance"
+    
+    # Calculate capacity for each point
+    capacity_grid = np.zeros_like(F)
+    
+    print("  Computing 3D capacity landscape...")
+    for i in tqdm(range(F.shape[0]), desc="    Distance levels"):
+        for j in range(F.shape[1]):
+            f_Hz = F[i, j] * 1e9
+            d_m = D[i, j] * 1e3
+            
+            # Create system
+            system = EnhancedISACSystem(hardware_profile, f_c=f_Hz, distance=d_m)
+            
+            # Calculate capacity
+            p_x = np.ones(len(system.constellation)) / len(system.constellation)
+            I_x = system.calculate_mutual_information(p_x, n_mc=50)
+            capacity_grid[i, j] = np.mean(I_x)
+    
+    # Data storage
+    data_to_save = {
+        'frequency_GHz': frequencies_GHz.tolist(),
+        'distance_km': distances_km.tolist(),
+        'capacity_grid': capacity_grid.tolist(),
+        'hardware_profile': hardware_profile
+    }
+    
+    # Create multiple views
+    viewing_angles = [
+        (25, 45, 'default'),
+        (15, 60, 'frequency_emphasis'),
+        (30, 15, 'distance_emphasis'),
+        (45, 45, 'isometric')
+    ]
+    
+    for elev, azim, view_name in viewing_angles:
+        fig = plt.figure(figsize=IEEEStyle.FIG_SIZES['3d'])
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Surface plot
+        surf = ax.plot_surface(F, D, capacity_grid, cmap='viridis', 
+                              edgecolor='none', alpha=0.8)
+        
+        # Add contour lines at the bottom
+        contours = ax.contour(F, D, capacity_grid, zdir='z', offset=0, 
+                              cmap='viridis', alpha=0.5)
+        
+        # Labels and formatting
+        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_zlabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_title('THz ISL ISAC Capacity Landscape\n(High Performance Hardware)', 
+                    fontsize=IEEEStyle.FONT_SIZES['title'], pad=20)
+        
+        # Add colorbar
+        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+        
+        # Set viewing angle
+        ax.view_init(elev=elev, azim=azim)
+        
+        # Highlight 1THz
+        ax.plot([1000, 1000], [distances_km[0], distances_km[-1]], 
+               [0, 0], 'r--', linewidth=2, alpha=0.7)
+        
+        plt.tight_layout()
+        plt.savefig(f'results/{save_name}_{view_name}.pdf', 
+                   format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'results/{save_name}_{view_name}.png', 
+                   format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    data_saver.save_data(save_name, data_to_save,
+                       "3D capacity landscape data")
+    
+    print(f"Saved: results/{save_name}_[views].pdf/png and data")
 
 def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
                           max_iterations: int = 20, n_mc: int = 50) -> Tuple[float, np.ndarray]:
@@ -614,8 +721,11 @@ def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
 def main():
     """Main function to generate all capacity analysis plots."""
     print("=== THz ISL ISAC Capacity Analysis (IEEE Style) ===")
-    print("With pointing error Monte Carlo averaging")
-    print(f"Current font sizes: {IEEEStyle.FONT_SIZES}")
+    print("With data saving and 3D visualizations")
+    print(f"Default SNR: {simulation.default_SNR_dB} dB")
+    print(f"Default antenna: {scenario.default_antenna_diameter} m")
+    print(f"Default TX power: {scenario.default_tx_power_dBm} dBm")
+    print(f"Frequency range: up to {scenario.f_c_max/1e9:.0f} GHz")
     
     # Note about observability
     print("\nNOTE: Analysis based on single ISL (2 observable parameters)")
@@ -623,15 +733,19 @@ def main():
     # Generate all individual plots
     plot_cd_frontier()
     plot_capacity_vs_snr()
-    plot_2d_performance_analysis()  # Replaces 3D plots
-    plot_performance_summary()
+    plot_capacity_vs_frequency()
+    plot_capacity_vs_distance()
+    plot_hardware_quality_impact()
+    plot_3d_capacity_landscape()
     
     print("\n=== Capacity Analysis Complete ===")
     print("Generated files in results/:")
-    print("- fig_cd_frontier.pdf/png")
-    print("- fig_capacity_vs_snr.pdf/png")
-    print("- fig_2d_performance_analysis.pdf/png")
-    print("- fig_performance_summary.pdf/png")
+    print("- fig_cd_frontier.pdf/png + data")
+    print("- fig_capacity_vs_snr.pdf/png + data")
+    print("- fig_capacity_vs_frequency.pdf/png + data")
+    print("- fig_capacity_vs_distance.pdf/png + data")
+    print("- fig_hardware_quality_impact.pdf/png + data")
+    print("- fig_3d_capacity_landscape_[views].pdf/png + data")
 
 if __name__ == "__main__":
     main()

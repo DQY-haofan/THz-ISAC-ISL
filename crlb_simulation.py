@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 crlb_simulation.py - IEEE Publication Style with Individual Plots
-Updated with pointing error model and Monte Carlo averaging
+Updated with data saving, 3D plots, and 1THz support
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.patches import Rectangle
+from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 from typing import Tuple, Dict, List
 import itertools
@@ -22,7 +23,8 @@ from simulation_config import (
     HARDWARE_PROFILES,
     DerivedParameters,
     ObservableParameters,
-    IEEEStyle
+    IEEEStyle,
+    data_saver
 )
 
 # Setup IEEE style
@@ -39,8 +41,10 @@ class EnhancedCRLBAnalyzer:
         self.observable_dim = ObservableParameters.get_observable_dimension()
     
     def calculate_channel_gain(self, distance_m: float, frequency_Hz: float, 
-                              antenna_diameter: float = 0.5) -> float:
+                              antenna_diameter: float = None) -> float:
         """Calculate channel gain magnitude |g|."""
+        if antenna_diameter is None:
+            antenna_diameter = scenario.default_antenna_diameter
         lambda_c = PhysicalConstants.wavelength(frequency_Hz)
         G_single = scenario.antenna_gain(antenna_diameter, frequency_Hz)
         beta_ch = (lambda_c / (4 * np.pi * distance_m)) * np.sqrt(G_single * G_single)
@@ -54,11 +58,16 @@ class EnhancedCRLBAnalyzer:
     
     def calculate_effective_noise_variance_mc(
         self, SNR_linear: float, channel_gain: float, hardware_profile: str,
-        signal_power: float = 1.0, tx_power_dBm: float = 20,
+        signal_power: float = 1.0, tx_power_dBm: float = None,
         bandwidth_Hz: float = 10e9, frequency_Hz: float = 300e9,
-        antenna_diameter: float = 1.0, n_mc: int = 100
+        antenna_diameter: float = None, n_mc: int = 100
     ) -> Tuple[float, float]:
         """Calculate effective noise variance with Monte Carlo pointing error averaging."""
+        if tx_power_dBm is None:
+            tx_power_dBm = scenario.default_tx_power_dBm
+        if antenna_diameter is None:
+            antenna_diameter = scenario.default_antenna_diameter
+            
         profile = HARDWARE_PROFILES[hardware_profile]
         B = self.calculate_bussgang_gain()
         
@@ -85,9 +94,12 @@ class EnhancedCRLBAnalyzer:
         self, f_c: float, sigma_eff_sq: float, M: int,
         channel_gain: float, B: float, sigma_phi_sq: float,
         T_CPI: float = 1e-3, signal_power: float = 1.0,
-        antenna_diameter: float = 1.0, n_mc: int = 100
+        antenna_diameter: float = None, n_mc: int = 100
     ) -> Dict[str, float]:
         """Calculate BCRLB for observable parameters with Monte Carlo pointing error."""
+        if antenna_diameter is None:
+            antenna_diameter = scenario.default_antenna_diameter
+            
         phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
         doppler_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2 * T_CPI**2)
         
@@ -115,16 +127,24 @@ class EnhancedCRLBAnalyzer:
         """Plot ranging CRLB vs SNR for all hardware profiles - IEEE style."""
         print(f"\n=== Generating {save_name} ===")
         
-        # Create figure with IEEE single column size
-        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+        # Create figure with fixed size
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
         
         # Parameters
         frequency_Hz = 300e9
-        antenna_diameter = 1.0
-        tx_power_dBm = 30
+        antenna_diameter = scenario.default_antenna_diameter
+        tx_power_dBm = scenario.default_tx_power_dBm
         
         # All hardware profiles
         profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
+        
+        # Data storage
+        data_to_save = {
+            'snr_dB': simulation.SNR_dB_array.tolist(),
+            'frequency_GHz': frequency_Hz/1e9,
+            'antenna_diameter_m': antenna_diameter,
+            'tx_power_dBm': tx_power_dBm
+        }
         
         # Calculate for each profile
         for i, hardware_profile in enumerate(profiles_to_plot):
@@ -146,7 +166,7 @@ class EnhancedCRLBAnalyzer:
                 sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
                     snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
                     frequency_Hz=frequency_Hz, antenna_diameter=antenna_diameter,
-                    n_mc=100  # Reduced for speed
+                    n_mc=100
                 )
                 
                 bcrlbs = self.calculate_observable_bcrlb_mc(
@@ -157,6 +177,9 @@ class EnhancedCRLBAnalyzer:
                 
                 rmse_m = np.sqrt(bcrlbs['range'])
                 ranging_rmse_mm.append(rmse_m * 1000)
+            
+            # Store data
+            data_to_save[f'ranging_rmse_mm_{hardware_profile}'] = ranging_rmse_mm
             
             # Plot with IEEE style
             ax.semilogy(simulation.SNR_dB_array, ranging_rmse_mm,
@@ -191,131 +214,222 @@ class EnhancedCRLBAnalyzer:
         ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
                  frameon=True, edgecolor='black', framealpha=0.9)
         
-        # Axis limits
-        ax.set_xlim(-10, 50)
-        ax.set_ylim(1e-2, 1e3)
+        # Axis limits with padding
+        ax.set_xlim(-10, 60)
+        ax.set_ylim(1e-3, 1e4)
         
         # Tight layout
         plt.tight_layout()
         
-        # Save to results folder
+        # Save figure
         plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
         plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+        # Save data
+        data_saver.save_data(save_name, data_to_save, 
+                           "Ranging CRLB vs SNR for different hardware profiles")
+        
+        print(f"Saved: results/{save_name}.pdf/png and data")
     
-    def plot_hardware_comparison(self, save_name='fig_hardware_comparison'):
-        """Plot hardware profile comparison - IEEE style."""
+    def plot_ranging_vs_frequency(self, save_name='fig_ranging_vs_frequency'):
+        """Plot ranging performance vs frequency (separate plot)."""
         print(f"\n=== Generating {save_name} ===")
         
-        # Create figure with IEEE double column size
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=IEEEStyle.FIG_SIZES['double'])
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
         
         # Parameters
-        snr_dB_values = [10, 20, 30]
-        f_c_GHz = 300
-        f_c_Hz = f_c_GHz * 1e9
-        antenna_diameter = 1.0
-        tx_power_dBm = 30
+        snr_dB = simulation.default_SNR_dB  # High SNR
+        frequencies_GHz = simulation.frequency_sweep_GHz
+        frequencies_Hz = frequencies_GHz * 1e9
+        hardware_profile = "High_Performance"
+        antenna_diameter = scenario.default_antenna_diameter
+        tx_power_dBm = scenario.default_tx_power_dBm
         
-        profiles = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
+        profile = HARDWARE_PROFILES[hardware_profile]
+        B = self.calculate_bussgang_gain()
         
         # Data storage
-        ranging_data = {profile: [] for profile in profiles}
-        velocity_data = {profile: [] for profile in profiles}
+        data_to_save = {
+            'frequency_GHz': frequencies_GHz.tolist(),
+            'snr_dB': snr_dB,
+            'hardware_profile': hardware_profile
+        }
         
-        for profile_name in profiles:
-            if profile_name not in HARDWARE_PROFILES:
-                continue
-                
-            profile = HARDWARE_PROFILES[profile_name]
+        ranging_rmse_mm = []
+        
+        print(f"  Processing frequencies up to {frequencies_GHz[-1]} GHz...")
+        for f_Hz in tqdm(frequencies_Hz, desc="    Frequency sweep", leave=False):
+            snr_linear = 10 ** (snr_dB / 10)
             
-            g = self.calculate_channel_gain(scenario.R_default, f_c_Hz, antenna_diameter)
-            B = self.calculate_bussgang_gain()
+            g = self.calculate_channel_gain(scenario.R_default, f_Hz, antenna_diameter)
+            sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
+                snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
+                frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=100
+            )
             
-            for snr_dB in snr_dB_values:
-                snr_linear = 10**(snr_dB/10)
-                
-                sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
-                    snr_linear, g, profile_name, tx_power_dBm=tx_power_dBm,
-                    frequency_Hz=f_c_Hz, antenna_diameter=antenna_diameter, n_mc=100
-                )
-                
-                bcrlbs = self.calculate_observable_bcrlb_mc(
-                    f_c_Hz, sigma_eff_sq, simulation.n_pilots,
-                    g, B, profile.phase_noise_variance,
-                    antenna_diameter=antenna_diameter, n_mc=100
-                )
-                
-                ranging_rmse_m = np.sqrt(bcrlbs['range'])
-                ranging_data[profile_name].append(ranging_rmse_m * 1000)
-                
-                velocity_rmse_ms = np.sqrt(bcrlbs['range_rate'])
-                velocity_data[profile_name].append(velocity_rmse_ms)
+            bcrlbs = self.calculate_observable_bcrlb_mc(
+                f_Hz, sigma_eff_sq, simulation.n_pilots,
+                g, B, profile.phase_noise_variance,
+                antenna_diameter=antenna_diameter, n_mc=100
+            )
+            
+            rmse_m = np.sqrt(bcrlbs['range'])
+            ranging_rmse_mm.append(rmse_m * 1000)
         
-        # Plot ranging RMSE (without value labels)
-        x = np.arange(len(snr_dB_values))
-        width = 0.2
+        data_to_save['ranging_rmse_mm'] = ranging_rmse_mm
         
-        for i, profile_name in enumerate(profiles):
-            if profile_name not in ranging_data:
-                continue
-            offset = (i - 1.5) * width
-            bars = ax1.bar(x + offset, ranging_data[profile_name], width,
-                           label=profile_name.replace('_', ' '),
-                           color=colors[i], alpha=0.8, edgecolor='black')
+        # Plot
+        ax.loglog(frequencies_GHz, ranging_rmse_mm,
+                 color=colors[0], 
+                 linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                 marker=markers[0], 
+                 markersize=IEEEStyle.LINE_PROPS['markersize'],
+                 markerfacecolor='white',
+                 markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                 label='Actual Performance')
         
-        ax1.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax1.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax1.set_title('(a) Ranging Performance', fontsize=IEEEStyle.FONT_SIZES['title'])
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(snr_dB_values)
-        ax1.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1, loc='upper right')
-        ax1.grid(True, axis='y', **IEEEStyle.GRID_PROPS)
-        ax1.set_yscale('log')
+        # Add theoretical f^-2 scaling
+        f_ref = 300
+        rmse_ref = ranging_rmse_mm[np.where(frequencies_GHz == f_ref)[0][0]]
+        theoretical = rmse_ref * (f_ref / frequencies_GHz)**2
+        ax.loglog(frequencies_GHz, theoretical, 
+                 color=colors[0], linestyle='--', 
+                 linewidth=IEEEStyle.LINE_PROPS['linewidth']-0.5,
+                 label='$f^{-2}$ scaling')
         
-        # Plot velocity RMSE (without value labels)
-        for i, profile_name in enumerate(profiles):
-            if profile_name not in velocity_data:
-                continue
-            offset = (i - 1.5) * width
-            bars = ax2.bar(x + offset, velocity_data[profile_name], width,
-                           label=profile_name.replace('_', ' '),
-                           color=colors[i], alpha=0.8, edgecolor='black')
+        # Highlight 1THz
+        ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
+        ax.text(1000, ax.get_ylim()[0]*2, '1 THz', 
+               ha='center', fontsize=IEEEStyle.FONT_SIZES['annotation'], color='red')
         
-        ax2.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax2.set_ylabel('Velocity RMSE (m/s)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax2.set_title('(b) Velocity Estimation', fontsize=IEEEStyle.FONT_SIZES['title'])
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(snr_dB_values)
-        ax2.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1, loc='upper right')
-        ax2.grid(True, axis='y', **IEEEStyle.GRID_PROPS)
-        ax2.set_yscale('log')
+        # Performance threshold
+        ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
+        
+        # Labels
+        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_title(f'Frequency Scaling of Ranging Performance (SNR = {snr_dB} dB)',
+                    fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax.grid(True, **IEEEStyle.GRID_PROPS)
+        ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
+        
+        # Set axis limits with padding
+        ax.set_xlim(80, 1200)
+        ax.set_ylim(1e-4, 10)
         
         plt.tight_layout()
         plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
         plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+        data_saver.save_data(save_name, data_to_save,
+                           "Ranging performance vs frequency scaling")
+        
+        print(f"Saved: results/{save_name}.pdf/png and data")
     
-    def plot_pointing_error_sensitivity(self, save_name='fig_pointing_error_sensitivity'):
-        """Plot sensitivity to pointing error - NEW function."""
+    def plot_velocity_vs_frequency(self, save_name='fig_velocity_vs_frequency'):
+        """Plot velocity estimation performance vs frequency (separate plot)."""
         print(f"\n=== Generating {save_name} ===")
         
-        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
+        
+        # Parameters
+        snr_dB = simulation.default_SNR_dB
+        frequencies_GHz = simulation.frequency_sweep_GHz
+        frequencies_Hz = frequencies_GHz * 1e9
+        hardware_profile = "High_Performance"
+        antenna_diameter = scenario.default_antenna_diameter
+        tx_power_dBm = scenario.default_tx_power_dBm
+        
+        profile = HARDWARE_PROFILES[hardware_profile]
+        B = self.calculate_bussgang_gain()
+        
+        # Data storage
+        data_to_save = {
+            'frequency_GHz': frequencies_GHz.tolist(),
+            'snr_dB': snr_dB,
+            'hardware_profile': hardware_profile
+        }
+        
+        velocity_rmse_ms = []
+        
+        for f_Hz in tqdm(frequencies_Hz, desc="    Frequency sweep", leave=False):
+            snr_linear = 10 ** (snr_dB / 10)
+            
+            g = self.calculate_channel_gain(scenario.R_default, f_Hz, antenna_diameter)
+            sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
+                snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
+                frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=100
+            )
+            
+            bcrlbs = self.calculate_observable_bcrlb_mc(
+                f_Hz, sigma_eff_sq, simulation.n_pilots,
+                g, B, profile.phase_noise_variance,
+                antenna_diameter=antenna_diameter, n_mc=100
+            )
+            
+            rmse_v = np.sqrt(bcrlbs['range_rate'])
+            velocity_rmse_ms.append(rmse_v)
+        
+        data_to_save['velocity_rmse_ms'] = velocity_rmse_ms
+        
+        # Plot
+        ax.loglog(frequencies_GHz, velocity_rmse_ms,
+                 color=colors[1], 
+                 linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                 marker=markers[1], 
+                 markersize=IEEEStyle.LINE_PROPS['markersize'],
+                 markerfacecolor='white',
+                 markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
+        
+        # Highlight 1THz
+        ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
+        
+        # Labels
+        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_ylabel('Velocity RMSE (m/s)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        ax.set_title(f'Velocity Estimation vs. Frequency (SNR = {snr_dB} dB)',
+                    fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax.grid(True, **IEEEStyle.GRID_PROPS)
+        
+        # Set axis limits with padding
+        ax.set_xlim(80, 1200)
+        ax.set_ylim(1e-4, 1e0)
+        
+        plt.tight_layout()
+        plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        data_saver.save_data(save_name, data_to_save,
+                           "Velocity estimation performance vs frequency")
+        
+        print(f"Saved: results/{save_name}.pdf/png and data")
+    
+    def plot_pointing_error_sensitivity(self, save_name='fig_pointing_error_sensitivity'):
+        """Plot sensitivity to pointing error - standalone."""
+        print(f"\n=== Generating {save_name} ===")
+        
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
         
         # Parameters
         f_c = 300e9
-        antenna_diameter = 1.0
-        tx_power_dBm = 30
+        antenna_diameter = scenario.default_antenna_diameter
+        tx_power_dBm = scenario.default_tx_power_dBm
         hardware_profile = "High_Performance"
         pointing_errors_urad = [0.5, 1.0, 2.0]  # µrad
         
         profile = HARDWARE_PROFILES[hardware_profile]
         B = self.calculate_bussgang_gain()
         g = self.calculate_channel_gain(scenario.R_default, f_c, antenna_diameter)
+        
+        # Data storage
+        data_to_save = {
+            'snr_dB': simulation.SNR_dB_array.tolist(),
+            'pointing_errors_urad': pointing_errors_urad,
+            'hardware_profile': hardware_profile
+        }
         
         for idx, pe_urad in enumerate(pointing_errors_urad):
             pe_rad = pe_urad * 1e-6
@@ -325,7 +439,8 @@ class EnhancedCRLBAnalyzer:
             original_pe = scenario.pointing_error_rms_rad
             scenario.pointing_error_rms_rad = pe_rad
             
-            for snr_dB in simulation.SNR_dB_array:
+            print(f"  Processing σ_θ = {pe_urad} µrad...")
+            for snr_dB in tqdm(simulation.SNR_dB_array, desc="    SNR sweep", leave=False):
                 snr_linear = 10**(snr_dB/10)
                 
                 sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
@@ -343,6 +458,8 @@ class EnhancedCRLBAnalyzer:
             
             # Restore original
             scenario.pointing_error_rms_rad = original_pe
+            
+            data_to_save[f'ranging_rmse_mm_{pe_urad}urad'] = ranging_rmse_mm
             
             # Plot
             ax.semilogy(simulation.SNR_dB_array, ranging_rmse_mm,
@@ -368,25 +485,28 @@ class EnhancedCRLBAnalyzer:
                     fontsize=IEEEStyle.FONT_SIZES['title'])
         ax.grid(True, **IEEEStyle.GRID_PROPS)
         ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
-        ax.set_xlim(-10, 50)
-        ax.set_ylim(1e-2, 1e3)
+        ax.set_xlim(-10, 60)
+        ax.set_ylim(1e-3, 1e4)
         
         plt.tight_layout()
         plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
         plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+        data_saver.save_data(save_name, data_to_save,
+                           "Pointing error sensitivity analysis")
+        
+        print(f"Saved: results/{save_name}.pdf/png and data")
     
     def plot_feasibility_map(self, save_name='fig_feasibility_map'):
-        """Plot 2D feasibility map for antenna size vs transmit power - NEW."""
+        """Plot 2D feasibility map for antenna size vs transmit power."""
         print(f"\n=== Generating {save_name} ===")
         
-        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['square'])
+        fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
         
         # Parameter ranges
-        antenna_diameters = np.linspace(0.3, 2.0, 20)
-        tx_powers_dBm = np.linspace(10, 33, 20)
+        antenna_diameters = np.linspace(0.5, 2.0, 20)
+        tx_powers_dBm = np.linspace(20, 35, 20)
         
         # Fixed parameters
         f_c = 300e9
@@ -397,12 +517,21 @@ class EnhancedCRLBAnalyzer:
         min_link_margin_dB = 3  # Minimum link margin for closure
         max_ranging_rmse_mm = 1.0  # Sub-mm requirement
         min_capacity_bits = 2.0  # Good communication
+        max_excellent_rmse_mm = 0.1  # Excellent sensing
+        min_excellent_capacity = 4.0  # Excellent communication
         
         # Create meshgrid
         D, P = np.meshgrid(antenna_diameters, tx_powers_dBm)
         
         # Initialize feasibility map
         feasibility = np.zeros_like(D)
+        
+        # Data storage
+        data_to_save = {
+            'antenna_diameters_m': antenna_diameters.tolist(),
+            'tx_powers_dBm': tx_powers_dBm.tolist(),
+            'hardware_profile': hardware_profile
+        }
         
         print("  Computing feasibility map...")
         for i in tqdm(range(D.shape[0]), desc="    Power levels"):
@@ -422,8 +551,8 @@ class EnhancedCRLBAnalyzer:
                     feasibility[i,j] = 0  # Link doesn't close
                     continue
                 
-                # Check ranging performance at SNR = 20 dB
-                snr_linear = 100
+                # Check ranging performance at high SNR
+                snr_linear = 10**(simulation.default_SNR_dB/10)
                 g = self.calculate_channel_gain(distance, f_c, ant_diam)
                 B = self.calculate_bussgang_gain()
                 profile = HARDWARE_PROFILES[hardware_profile]
@@ -444,11 +573,15 @@ class EnhancedCRLBAnalyzer:
                 # Simplified capacity estimate
                 capacity = np.log2(1 + snr_linear / (1 + snr_linear * profile.Gamma_eff))
                 
-                # Determine feasibility
+                # Determine feasibility level
                 comm_ok = capacity >= min_capacity_bits
                 sense_ok = ranging_rmse_mm <= max_ranging_rmse_mm
+                comm_excellent = capacity >= min_excellent_capacity
+                sense_excellent = ranging_rmse_mm <= max_excellent_rmse_mm
                 
-                if comm_ok and sense_ok:
+                if comm_excellent and sense_excellent:
+                    feasibility[i,j] = 4  # Excellent both
+                elif comm_ok and sense_ok:
                     feasibility[i,j] = 3  # Both OK
                 elif comm_ok:
                     feasibility[i,j] = 1  # Communication only
@@ -457,16 +590,24 @@ class EnhancedCRLBAnalyzer:
                 else:
                     feasibility[i,j] = 0.5  # Link OK but neither meets specs
         
-        # Create custom colormap
-        cmap = plt.cm.colors.ListedColormap(['darkred', 'orange', 'lightcoral', 'lightblue', 'darkgreen'])
-        bounds = [0, 0.25, 0.75, 1.5, 2.5, 3.5]
+        data_to_save['feasibility_map'] = feasibility.tolist()
+        
+        # Create professional colormap
+        colors_map = [IEEEStyle.COLORS_FEASIBILITY['infeasible'],
+                     '#ffcccc',  # Link OK but poor performance
+                     IEEEStyle.COLORS_FEASIBILITY['comm_only'],
+                     IEEEStyle.COLORS_FEASIBILITY['sense_only'],
+                     IEEEStyle.COLORS_FEASIBILITY['both'],
+                     IEEEStyle.COLORS_FEASIBILITY['excellent']]
+        cmap = plt.cm.colors.ListedColormap(colors_map)
+        bounds = [0, 0.25, 0.75, 1.5, 2.5, 3.5, 4.5]
         norm = plt.cm.colors.BoundaryNorm(bounds, cmap.N)
         
         # Plot
         im = ax.contourf(D, P, feasibility, levels=bounds, cmap=cmap, norm=norm)
         
         # Add contour lines
-        ax.contour(D, P, feasibility, levels=[0.5, 1.5, 2.5], colors='black', 
+        ax.contour(D, P, feasibility, levels=[0.5, 1.5, 2.5, 3.5], colors='black', 
                    linewidths=1, alpha=0.5)
         
         # Labels
@@ -479,11 +620,17 @@ class EnhancedCRLBAnalyzer:
         # Add legend
         from matplotlib.patches import Patch
         legend_elements = [
-            Patch(facecolor='darkred', edgecolor='black', label='Link Fails'),
-            Patch(facecolor='orange', edgecolor='black', label='Link OK, Neither Meets Spec'),
-            Patch(facecolor='lightcoral', edgecolor='black', label='Communication Only'),
-            Patch(facecolor='lightblue', edgecolor='black', label='Sensing Only'),
-            Patch(facecolor='darkgreen', edgecolor='black', label='ISAC Feasible')
+            Patch(facecolor=IEEEStyle.COLORS_FEASIBILITY['infeasible'], 
+                  edgecolor='black', label='Link Fails'),
+            Patch(facecolor='#ffcccc', edgecolor='black', label='Poor Performance'),
+            Patch(facecolor=IEEEStyle.COLORS_FEASIBILITY['comm_only'], 
+                  edgecolor='black', label='Communication Only'),
+            Patch(facecolor=IEEEStyle.COLORS_FEASIBILITY['sense_only'], 
+                  edgecolor='black', label='Sensing Only'),
+            Patch(facecolor=IEEEStyle.COLORS_FEASIBILITY['both'], 
+                  edgecolor='black', label='ISAC Feasible'),
+            Patch(facecolor=IEEEStyle.COLORS_FEASIBILITY['excellent'], 
+                  edgecolor='black', label='Excellent Performance')
         ]
         ax.legend(handles=legend_elements, loc='lower right', 
                  fontsize=IEEEStyle.FONT_SIZES['legend']-1)
@@ -493,10 +640,10 @@ class EnhancedCRLBAnalyzer:
         
         # Mark recommended region
         from matplotlib.patches import Rectangle
-        rect = Rectangle((0.8, 28), 1.2, 5, fill=False, 
+        rect = Rectangle((1.3, 30), 0.4, 3, fill=False, 
                         edgecolor='white', linewidth=2, linestyle='--')
         ax.add_patch(rect)
-        ax.text(1.4, 30.5, 'Recommended', ha='center', color='white',
+        ax.text(1.5, 31.5, 'Recommended', ha='center', color='white',
                fontsize=IEEEStyle.FONT_SIZES['annotation'], 
                bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
         
@@ -505,13 +652,125 @@ class EnhancedCRLBAnalyzer:
         plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
+        data_saver.save_data(save_name, data_to_save,
+                           "ISAC feasibility map for antenna size vs transmit power")
+        
+        print(f"Saved: results/{save_name}.pdf/png and data")
+    
+    def plot_3d_performance_landscape(self, save_name='fig_3d_performance_landscape'):
+        """Plot 3D performance landscape with multiple viewing angles."""
+        print(f"\n=== Generating {save_name} ===")
+        
+        # Parameter ranges
+        frequencies_GHz = np.linspace(100, 1000, 15)
+        distances_km = np.linspace(500, 5000, 15)
+        
+        # Create meshgrid
+        F, D = np.meshgrid(frequencies_GHz, distances_km)
+        
+        # Fixed parameters
+        hardware_profile = "High_Performance"
+        snr_dB = simulation.default_SNR_dB
+        antenna_diameter = scenario.default_antenna_diameter
+        tx_power_dBm = scenario.default_tx_power_dBm
+        
+        # Calculate ranging RMSE for each point
+        ranging_rmse_grid = np.zeros_like(F)
+        
+        print("  Computing 3D landscape...")
+        for i in tqdm(range(F.shape[0]), desc="    Distance levels"):
+            for j in range(F.shape[1]):
+                f_Hz = F[i, j] * 1e9
+                d_m = D[i, j] * 1e3
+                
+                snr_linear = 10**(snr_dB/10)
+                g = self.calculate_channel_gain(d_m, f_Hz, antenna_diameter)
+                B = self.calculate_bussgang_gain()
+                profile = HARDWARE_PROFILES[hardware_profile]
+                
+                sigma_eff_sq, _ = self.calculate_effective_noise_variance_mc(
+                    snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
+                    frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=50
+                )
+                
+                bcrlbs = self.calculate_observable_bcrlb_mc(
+                    f_Hz, sigma_eff_sq, simulation.n_pilots,
+                    g, B, profile.phase_noise_variance,
+                    antenna_diameter=antenna_diameter, n_mc=50
+                )
+                
+                ranging_rmse_grid[i, j] = np.sqrt(bcrlbs['range']) * 1000
+        
+        # Data storage
+        data_to_save = {
+            'frequency_GHz': frequencies_GHz.tolist(),
+            'distance_km': distances_km.tolist(),
+            'ranging_rmse_mm': ranging_rmse_grid.tolist(),
+            'hardware_profile': hardware_profile,
+            'snr_dB': snr_dB
+        }
+        
+        # Create multiple views
+        viewing_angles = [
+            (25, 45, 'default'),
+            (15, 60, 'frequency_emphasis'),
+            (30, 15, 'distance_emphasis'),
+            (45, 45, 'isometric')
+        ]
+        
+        for elev, azim, view_name in viewing_angles:
+            fig = plt.figure(figsize=IEEEStyle.FIG_SIZES['3d'])
+            ax = fig.add_subplot(111, projection='3d')
+            
+            # Surface plot with log scale
+            surf = ax.plot_surface(F, D, np.log10(ranging_rmse_grid), 
+                                  cmap='viridis', 
+                                  edgecolor='none', alpha=0.8)
+            
+            # Add contour lines at the bottom
+            contours = ax.contour(F, D, np.log10(ranging_rmse_grid), 
+                                 zdir='z', offset=np.log10(ranging_rmse_grid).min() - 0.5, 
+                                 cmap='viridis', alpha=0.5)
+            
+            # Labels and formatting
+            ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+            ax.set_ylabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
+            ax.set_zlabel('log10(Ranging RMSE [mm])', fontsize=IEEEStyle.FONT_SIZES['label'])
+            ax.set_title(f'THz ISL Ranging Performance Landscape\n' +
+                        f'({hardware_profile}, SNR = {snr_dB} dB)', 
+                        fontsize=IEEEStyle.FONT_SIZES['title'], pad=20)
+            
+            # Add colorbar
+            fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, 
+                        label='log10(RMSE [mm])')
+            
+            # Set viewing angle
+            ax.view_init(elev=elev, azim=azim)
+            
+            # Highlight 1THz
+            ax.plot([1000, 1000], [distances_km[0], distances_km[-1]], 
+                   [ax.get_zlim()[0], ax.get_zlim()[0]], 
+                   'r--', linewidth=2, alpha=0.7)
+            
+            plt.tight_layout()
+            plt.savefig(f'results/{save_name}_{view_name}.pdf', 
+                       format='pdf', dpi=300, bbox_inches='tight')
+            plt.savefig(f'results/{save_name}_{view_name}.png', 
+                       format='png', dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        data_saver.save_data(save_name, data_to_save,
+                           "3D performance landscape data")
+        
+        print(f"Saved: results/{save_name}_[views].pdf/png and data")
 
 def main():
     """Main function to generate all CRLB analysis plots."""
     print("=== THz ISL ISAC CRLB Analysis (IEEE Style) ===")
-    print("With pointing error Monte Carlo averaging")
-    print(f"Current font sizes: {IEEEStyle.FONT_SIZES}")
+    print("With data saving and 3D visualizations")
+    print(f"Default SNR: {simulation.default_SNR_dB} dB")
+    print(f"Default antenna: {scenario.default_antenna_diameter} m")
+    print(f"Default TX power: {scenario.default_tx_power_dBm} dBm")
     
     # Print observability warning once
     ObservableParameters.print_observability_warning()
@@ -520,16 +779,20 @@ def main():
     
     # Generate all plots
     analyzer.plot_ranging_crlb_vs_snr()
-    analyzer.plot_hardware_comparison()
-    analyzer.plot_pointing_error_sensitivity()  # NEW
-    analyzer.plot_feasibility_map()  # NEW
+    analyzer.plot_ranging_vs_frequency()
+    analyzer.plot_velocity_vs_frequency()
+    analyzer.plot_pointing_error_sensitivity()
+    analyzer.plot_feasibility_map()
+    analyzer.plot_3d_performance_landscape()
     
     print("\n=== CRLB Analysis Complete ===")
     print("Generated files in results/:")
-    print("- fig_ranging_crlb_vs_snr.pdf/png")
-    print("- fig_hardware_comparison.pdf/png")
-    print("- fig_pointing_error_sensitivity.pdf/png")
-    print("- fig_feasibility_map.pdf/png")
+    print("- fig_ranging_crlb_vs_snr.pdf/png + data")
+    print("- fig_ranging_vs_frequency.pdf/png + data")
+    print("- fig_velocity_vs_frequency.pdf/png + data")
+    print("- fig_pointing_error_sensitivity.pdf/png + data")
+    print("- fig_feasibility_map.pdf/png + data")
+    print("- fig_3d_performance_landscape_[views].pdf/png + data")
 
 if __name__ == "__main__":
     main()
