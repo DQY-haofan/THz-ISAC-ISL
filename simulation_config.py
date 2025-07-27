@@ -163,13 +163,25 @@ class DataSaver:
                         if isinstance(value[0], (list, np.ndarray)):
                             # 2D array
                             for row in value:
-                                f.write(' '.join(f'{v:.6e}' for v in row) + '\n')
+                                # Check if numeric before formatting
+                                if all(isinstance(v, (int, float, np.number)) for v in row):
+                                    f.write(' '.join(f'{v:.6e}' for v in row) + '\n')
+                                else:
+                                    f.write(' '.join(str(v) for v in row) + '\n')
                         else:
                             # 1D array
                             for v in value:
-                                f.write(f'{v:.6e}\n')
+                                # Check if numeric before formatting
+                                if isinstance(v, (int, float, np.number)):
+                                    f.write(f'{v:.6e}\n')
+                                else:
+                                    f.write(f'{v}\n')
                 else:
-                    f.write(f'{value:.6e}\n')
+                    # Single value
+                    if isinstance(value, (int, float, np.number)):
+                        f.write(f'{value:.6e}\n')
+                    else:
+                        f.write(f'{value}\n')
                 f.write('\n')
         
         print(f"  Data saved to: {json_path} and {txt_path}")
