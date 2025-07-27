@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 capacity_simulation.py - IEEE Publication Style with Individual Plots
+Updated with pointing error model and improved 2D visualizations
 """
 
 import numpy as np
@@ -11,6 +12,7 @@ import seaborn as sns
 from typing import Tuple, Dict, List
 from scipy.linalg import inv
 from tqdm import tqdm
+import os
 
 # Import configuration
 from simulation_config import (
@@ -30,7 +32,7 @@ markers = IEEEStyle.get_markers()
 linestyles = IEEEStyle.get_linestyles()
 
 class EnhancedISACSystem:
-    """Enhanced THz ISL ISAC system with IEEE publication style."""
+    """Enhanced THz ISL ISAC system with IEEE publication style and pointing error."""
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
                  distance: float = 2000e3, n_pilots: int = 64,
@@ -105,39 +107,54 @@ class EnhancedISACSystem:
             constellation /= np.sqrt(np.mean(np.abs(constellation)**2))
         return constellation
     
-    def calculate_sinr(self, symbol: complex, avg_power: float, P_tx_scale: float) -> float:
-        """Calculate SINR for given symbol and power allocation."""
+    def calculate_sinr_mc(self, symbol: complex, avg_power: float, P_tx_scale: float,
+                         n_mc: int = 100) -> float:
+        """Calculate SINR for given symbol with Monte Carlo pointing error averaging."""
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
         symbol_power = np.abs(symbol)**2
-        P_rx_signal = P_tx * symbol_power * (self.channel_gain**2) * (self.bussgang_gain**2)
+        
+        # Monte Carlo averaging over pointing error
+        pointing_losses = scenario.sample_pointing_loss(
+            self.f_c, self.antenna_diameter, n_samples=n_mc
+        )
+        
+        P_rx_signal_base = P_tx * symbol_power * (self.channel_gain**2) * (self.bussgang_gain**2)
+        P_rx_signal_avg = P_rx_signal_base * np.mean(pointing_losses)
         
         N_thermal = self.N_0
-        N_hw = P_rx_signal * self.profile.Gamma_eff
+        N_hw = P_rx_signal_avg * self.profile.Gamma_eff
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         
         N_total = N_thermal + N_hw * phase_penalty
-        sinr = P_rx_signal / N_total
+        sinr = P_rx_signal_avg / N_total
         return sinr
     
-    def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0) -> np.ndarray:
-        """Calculate mutual information for each symbol."""
+    def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
+                                   n_mc: int = 100) -> np.ndarray:
+        """Calculate mutual information for each symbol with MC averaging."""
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         I_x = np.zeros(len(self.constellation))
         
         for i, symbol in enumerate(self.constellation):
-            sinr = self.calculate_sinr(symbol, avg_power, P_tx_scale)
+            sinr = self.calculate_sinr_mc(symbol, avg_power, P_tx_scale, n_mc)
             I_x[i] = np.log2(1 + sinr)
             
         return I_x
     
-    def calculate_capacity_vs_snr(self, snr_dB_array: np.ndarray) -> Dict[str, np.ndarray]:
-        """Calculate capacity vs SNR showing hardware ceiling."""
+    def calculate_capacity_vs_snr(self, snr_dB_array: np.ndarray, n_mc: int = 100) -> Dict[str, np.ndarray]:
+        """Calculate capacity vs SNR showing hardware ceiling with MC averaging."""
         capacities = []
         
-        for snr_dB in snr_dB_array:
+        for snr_dB in tqdm(snr_dB_array, desc="    SNR sweep", leave=False):
             snr_linear = 10**(snr_dB/10)
             
-            P_signal = self.P_tx_watts * (self.channel_gain**2) * (self.bussgang_gain**2)
+            # Monte Carlo averaging
+            pointing_losses = scenario.sample_pointing_loss(
+                self.f_c, self.antenna_diameter, n_samples=n_mc
+            )
+            avg_pointing_loss = np.mean(pointing_losses)
+            
+            P_signal = self.P_tx_watts * (self.channel_gain**2) * (self.bussgang_gain**2) * avg_pointing_loss
             N_0_target = P_signal / snr_linear
             N_hw = P_signal * self.profile.Gamma_eff * np.exp(self.profile.phase_noise_variance)
             N_total = N_0_target + N_hw
@@ -156,10 +173,18 @@ class EnhancedISACSystem:
             'ceiling': ceiling
         }
     
-    def calculate_bfim_observable(self, avg_power: float, P_tx_scale: float) -> np.ndarray:
-        """Calculate B-FIM for observable parameters only (2x2 matrix)."""
+    def calculate_bfim_observable_mc(self, avg_power: float, P_tx_scale: float,
+                                    n_mc: int = 100) -> np.ndarray:
+        """Calculate B-FIM for observable parameters with MC averaging."""
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
-        P_rx = P_tx * (self.channel_gain**2) * (self.bussgang_gain**2)
+        
+        # Monte Carlo averaging
+        pointing_losses = scenario.sample_pointing_loss(
+            self.f_c, self.antenna_diameter, n_samples=n_mc
+        )
+        avg_pointing_loss = np.mean(pointing_losses)
+        
+        P_rx = P_tx * (self.channel_gain**2) * (self.bussgang_gain**2) * avg_pointing_loss
         
         N_thermal = self.N_0
         N_hw = P_rx * self.profile.Gamma_eff
@@ -183,14 +208,15 @@ class EnhancedISACSystem:
         
         return J_B
     
-    def calculate_distortion(self, p_x: np.ndarray, P_tx_scale: float = 1.0) -> float:
-        """Calculate sensing distortion for observable parameters."""
+    def calculate_distortion(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
+                           n_mc: int = 100) -> float:
+        """Calculate sensing distortion with MC averaging."""
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         
         if avg_power < 1e-10:
             return 1e10
         
-        J_B = self.calculate_bfim_observable(avg_power, P_tx_scale)
+        J_B = self.calculate_bfim_observable_mc(avg_power, P_tx_scale, n_mc)
         
         try:
             J_B_inv = inv(J_B)
@@ -209,7 +235,7 @@ class EnhancedISACSystem:
 # =========================================================================
 
 def plot_cd_frontier(save_name='fig_cd_frontier'):
-    """Plot C-D frontier for multiple hardware profiles - IEEE style."""
+    """Plot C-D frontier for all hardware profiles - IEEE style."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
@@ -220,23 +246,24 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         if profile_name not in HARDWARE_PROFILES:
             continue
             
+        print(f"  Processing {profile_name}...")
         system = EnhancedISACSystem(profile_name)
         
         # Generate C-D points
-        n_points = 15
+        n_points = 12
         distortions = []
         capacities = []
         
         # Find distortion range
         p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        D_max = system.calculate_distortion(p_uniform)
+        D_max = system.calculate_distortion(p_uniform, n_mc=50)
         D_min = D_max / 1000
         
         D_targets = np.logspace(np.log10(D_min), np.log10(D_max), n_points)
         
-        for D_target in D_targets:
-            capacity, p_opt = simple_cd_optimization(system, D_target)
-            actual_D = system.calculate_distortion(p_opt)
+        for D_target in tqdm(D_targets, desc=f"    D targets", leave=False):
+            capacity, p_opt = simple_cd_optimization(system, D_target, n_mc=50)
+            actual_D = system.calculate_distortion(p_opt, n_mc=50)
             
             if 0 < actual_D < 1e10 and capacity > 0:
                 distortions.append(actual_D)
@@ -254,7 +281,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                    markersize=IEEEStyle.LINE_PROPS['markersize'],
                    markerfacecolor='white', 
                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                   label=f'{profile_name.replace("_", " ")} ($\Gamma_{{eff}}$={profile.Gamma_eff})')
+                   label=f'{profile_name.replace("_", " ")}')
     
     # Add feasibility regions
     ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
@@ -272,7 +299,8 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     # Labels
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Capacity-Distortion Trade-off', fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax.set_title('Capacity-Distortion Trade-off (All Hardware Profiles)', 
+                fontsize=IEEEStyle.FONT_SIZES['title'])
     ax.set_xscale('log')
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
@@ -280,24 +308,28 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     ax.set_ylim(bottom=0)
     
     plt.tight_layout()
-    plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: {save_name}.pdf and {save_name}.png")
+    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
 
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
-    """Plot capacity vs SNR showing hardware ceilings - IEEE style."""
+    """Plot capacity vs SNR for all hardware profiles - IEEE style."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
     
-    profiles = ["State_of_Art", "High_Performance", "SWaP_Efficient"]
-    snr_dB_array = np.linspace(-10, 50, 100)
+    profiles = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
+    snr_dB_array = np.linspace(-10, 50, 60)
     
     for idx, profile_name in enumerate(profiles):
+        if profile_name not in HARDWARE_PROFILES:
+            continue
+            
+        print(f"  Processing {profile_name}...")
         system = EnhancedISACSystem(profile_name)
-        results = system.calculate_capacity_vs_snr(snr_dB_array)
+        results = system.calculate_capacity_vs_snr(snr_dB_array, n_mc=100)
         
         # Plot capacity
         ax.plot(snr_dB_array, results['capacity'], 
@@ -336,198 +368,141 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     ax.set_xlim(-10, 50)
     
     plt.tight_layout()
-    plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: {save_name}.pdf and {save_name}.png")
+    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
 
-def plot_hardware_quality_impact(save_name='fig_hardware_quality_impact'):
-    """Plot capacity vs hardware quality factor - IEEE style."""
+def plot_2d_performance_analysis(save_name='fig_2d_performance_analysis'):
+    """Plot 2D performance analysis instead of 3D landscape - NEW."""
     print(f"\n=== Generating {save_name} ===")
     
-    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8))
     
-    gamma_eff_range = np.logspace(-3, -1, 30)
-    snr_levels_dB = [10, 20, 30, 40]
+    # Common parameters
+    hardware_profile = "High_Performance"
     
-    for idx, snr_dB in enumerate(snr_levels_dB):
+    # 1. Capacity vs Frequency (different distances)
+    frequencies_GHz = np.linspace(100, 600, 20)
+    distances_km = [500, 1000, 2000, 5000]
+    
+    for idx, d_km in enumerate(distances_km):
+        capacities = []
+        print(f"  Processing distance {d_km} km...")
+        
+        for f_GHz in frequencies_GHz:
+            system = EnhancedISACSystem(
+                hardware_profile, f_c=f_GHz*1e9, distance=d_km*1e3
+            )
+            p_x = np.ones(len(system.constellation)) / len(system.constellation)
+            I_x = system.calculate_mutual_information(p_x, n_mc=50)
+            capacities.append(np.mean(I_x))
+        
+        ax1.plot(frequencies_GHz, capacities, 
+                color=colors[idx], linewidth=2,
+                marker=markers[idx], markersize=5, markevery=5,
+                label=f'{d_km} km')
+    
+    ax1.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax1.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax1.set_title('(a) Capacity vs. Frequency', fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax1.grid(True, **IEEEStyle.GRID_PROPS)
+    ax1.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
+    ax1.set_ylim(bottom=0)
+    
+    # 2. Capacity vs Distance (different frequencies)
+    distances_km = np.linspace(500, 5000, 20)
+    frequencies_GHz = [100, 200, 300, 600]
+    
+    for idx, f_GHz in enumerate(frequencies_GHz):
         capacities = []
         
-        for gamma_eff in gamma_eff_range:
-            custom_profile = HARDWARE_PROFILES["Custom"]
-            original_gamma = custom_profile.Gamma_eff
-            custom_profile.Gamma_eff = gamma_eff
-            
-            snr_linear = 10**(snr_dB/10)
-            phase_factor = np.exp(-custom_profile.phase_noise_variance)
-            sinr_eff = snr_linear / (1 + snr_linear * gamma_eff)
-            capacity = np.log2(1 + sinr_eff * phase_factor)
-            capacities.append(capacity)
-            
-            custom_profile.Gamma_eff = original_gamma
-        
-        ax.semilogx(gamma_eff_range, capacities, 
-                   color=colors[idx],
-                   linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                   linestyle=linestyles[idx],
-                   marker=markers[idx],
-                   markersize=IEEEStyle.LINE_PROPS['markersize']-1,
-                   markevery=6,
-                   markerfacecolor='white',
-                   markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                   label=f'SNR = {snr_dB} dB')
-    
-    # Mark existing hardware
-    for name, profile in HARDWARE_PROFILES.items():
-        if name != "Custom":
-            ax.axvline(x=profile.Gamma_eff, color='gray', 
-                      linestyle=':', alpha=0.5, linewidth=1.2)
-            ax.text(profile.Gamma_eff*1.1, 7.5, 
-                   name.split('_')[0], rotation=90, 
-                   fontsize=IEEEStyle.FONT_SIZES['annotation']-1, alpha=0.7)
-    
-    # Labels
-    ax.set_xlabel('Hardware Quality Factor $\Gamma_{eff}$',
-                 fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Impact of Hardware Quality on Capacity',
-                fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='lower left', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    ax.set_ylim(0, 8)
-    ax.set_xlim(1e-3, 1e-1)
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Saved: {save_name}.pdf and {save_name}.png")
-
-def plot_hardware_feasibility_map(save_name='fig_hardware_feasibility'):
-    """Plot 2D hardware feasibility map - IEEE style."""
-    print(f"\n=== Generating {save_name} ===")
-    
-    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
-    
-    # Parameter ranges
-    gamma_eff_range = np.logspace(-3, -1, 30)
-    phase_noise_range = np.logspace(-3, -1, 30)
-    
-    GAMMA, PHASE = np.meshgrid(gamma_eff_range, phase_noise_range)
-    
-    # Calculate capacity ceiling
-    feasibility = np.zeros_like(GAMMA)
-    for i in range(GAMMA.shape[0]):
-        for j in range(GAMMA.shape[1]):
-            ceiling = DerivedParameters.capacity_ceiling(GAMMA[i,j], PHASE[i,j])
-            feasibility[i,j] = ceiling
-    
-    # Create contour plot
-    levels = np.linspace(0, 8, 17)
-    cs = ax.contourf(GAMMA, PHASE, feasibility, levels=levels, cmap='viridis')
-    
-    # Add contour lines for key capacities
-    contour_lines = ax.contour(GAMMA, PHASE, feasibility, 
-                               levels=[2, 4, 6], colors='white', 
-                               linewidths=1.5, alpha=0.8)
-    ax.clabel(contour_lines, inline=True, fontsize=IEEEStyle.FONT_SIZES['annotation']-1)
-    
-    # Mark hardware profiles
-    for name, profile in HARDWARE_PROFILES.items():
-        if name != "Custom":
-            ax.scatter(profile.Gamma_eff, profile.phase_noise_variance,
-                      s=100, marker='*', edgecolors='red', 
-                      linewidths=2, facecolors='white')
-            ax.text(profile.Gamma_eff*1.2, profile.phase_noise_variance,
-                   name.split('_')[0], 
-                   fontsize=IEEEStyle.FONT_SIZES['annotation']-1)
-    
-    # Labels
-    ax.set_xlabel('Hardware Quality Factor $\Gamma_{eff}$',
-                 fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Phase Noise Variance $\sigma^2_{\phi}$ (rad$^2$)',
-                 fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.set_title('Hardware Feasibility Map',
-                fontsize=IEEEStyle.FONT_SIZES['title'])
-    
-    # Add colorbar
-    cbar = plt.colorbar(cs, ax=ax)
-    cbar.set_label('Capacity Ceiling (bits/symbol)', 
-                  fontsize=IEEEStyle.FONT_SIZES['label'])
-    cbar.ax.tick_params(labelsize=IEEEStyle.FONT_SIZES['tick'])
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Saved: {save_name}.pdf and {save_name}.png")
-
-def plot_antenna_power_tradeoff(save_name='fig_antenna_power_tradeoff'):
-    """Plot antenna size vs power trade-off - IEEE style."""
-    print(f"\n=== Generating {save_name} ===")
-    
-    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
-    
-    antenna_sizes = np.array([0.3, 0.5, 1.0, 1.5, 2.0])
-    tx_powers = np.array([10, 20, 30, 33])
-    
-    # Calculate link margin for each combination
-    link_margins = np.zeros((len(antenna_sizes), len(tx_powers)))
-    
-    for i, ant_size in enumerate(antenna_sizes):
-        for j, tx_power in enumerate(tx_powers):
-            ant_gain = scenario.antenna_gain_dB(ant_size, scenario.f_c_default)
-            budget = DerivedParameters.link_budget_dB(
-                tx_power, ant_gain, ant_gain,
-                scenario.R_default, scenario.f_c_default
+        for d_km in distances_km:
+            system = EnhancedISACSystem(
+                hardware_profile, f_c=f_GHz*1e9, distance=d_km*1e3
             )
-            noise_dBm = DerivedParameters.thermal_noise_power_dBm(10e9, noise_figure_dB=8)
-            link_margins[i, j] = budget['rx_power_dBm'] - noise_dBm
+            p_x = np.ones(len(system.constellation)) / len(system.constellation)
+            I_x = system.calculate_mutual_information(p_x, n_mc=50)
+            capacities.append(np.mean(I_x))
+        
+        ax2.plot(distances_km, capacities, 
+                color=colors[idx], linewidth=2,
+                marker=markers[idx], markersize=5, markevery=5,
+                label=f'{f_GHz} GHz')
     
-    # Create heatmap
-    im = ax.imshow(link_margins, cmap='RdYlGn', aspect='auto',
-                  extent=[tx_powers[0]-2.5, tx_powers[-1]+2.5,
-                         antenna_sizes[0]-0.15, antenna_sizes[-1]+0.15],
-                  origin='lower', interpolation='bilinear')
+    ax2.set_xlabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax2.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax2.set_title('(b) Capacity vs. Distance', fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax2.grid(True, **IEEEStyle.GRID_PROPS)
+    ax2.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
+    ax2.set_ylim(bottom=0)
     
-    # Add contour lines
-    X, Y = np.meshgrid(tx_powers, antenna_sizes)
-    CS = ax.contour(X, Y, link_margins, levels=[0, 5, 10, 15], 
-                   colors='black', linewidths=1.5)
-    ax.clabel(CS, inline=True, fontsize=IEEEStyle.FONT_SIZES['annotation'])
+    # 3. RMSE vs Frequency (different SNRs)
+    frequencies_GHz = np.linspace(100, 600, 20)
+    snr_dB_values = [10, 20, 30, 40]
     
-    # Add colorbar
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Link Margin (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    cbar.ax.tick_params(labelsize=IEEEStyle.FONT_SIZES['tick'])
+    for idx, snr_dB in enumerate(snr_dB_values):
+        rmse_values = []
+        
+        for f_GHz in frequencies_GHz:
+            system = EnhancedISACSystem(hardware_profile, f_c=f_GHz*1e9)
+            # Simplified RMSE calculation
+            snr_linear = 10**(snr_dB/10)
+            phase_sensitivity = (2 * np.pi * f_GHz*1e9 / PhysicalConstants.c)**2
+            crlb = 1 / (2 * system.n_pilots * snr_linear * phase_sensitivity)
+            rmse_mm = np.sqrt(crlb) * 1000
+            rmse_values.append(rmse_mm)
+        
+        ax3.semilogy(frequencies_GHz, rmse_values, 
+                    color=colors[idx], linewidth=2,
+                    marker=markers[idx], markersize=5, markevery=5,
+                    label=f'{snr_dB} dB')
     
-    # Mark recommended region
-    rect = plt.Rectangle((25, 0.8), 8, 1.2, fill=False, 
-                        edgecolor='blue', linewidth=2, linestyle='--')
-    ax.add_patch(rect)
-    ax.text(29, 1.4, 'Recommended', ha='center', 
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
+    ax3.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax3.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax3.set_title('(c) RMSE vs. Frequency', fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax3.grid(True, **IEEEStyle.GRID_PROPS)
+    ax3.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
+    ax3.set_ylim(1e-3, 1e2)
     
-    # Labels
-    ax.set_xlabel('Transmit Power (dBm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Antenna Diameter (m)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Link Budget Trade-off Analysis',
-                fontsize=IEEEStyle.FONT_SIZES['title'])
+    # 4. RMSE vs SNR (different frequencies)
+    snr_dB_array = np.linspace(0, 40, 20)
+    frequencies_GHz = [100, 200, 300, 600]
     
+    for idx, f_GHz in enumerate(frequencies_GHz):
+        rmse_values = []
+        
+        for snr_dB in snr_dB_array:
+            system = EnhancedISACSystem(hardware_profile, f_c=f_GHz*1e9)
+            snr_linear = 10**(snr_dB/10)
+            phase_sensitivity = (2 * np.pi * f_GHz*1e9 / PhysicalConstants.c)**2
+            crlb = 1 / (2 * system.n_pilots * snr_linear * phase_sensitivity)
+            rmse_mm = np.sqrt(crlb) * 1000
+            rmse_values.append(rmse_mm)
+        
+        ax4.semilogy(snr_dB_array, rmse_values, 
+                    color=colors[idx], linewidth=2,
+                    marker=markers[idx], markersize=5, markevery=5,
+                    label=f'{f_GHz} GHz')
+    
+    ax4.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax4.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax4.set_title('(d) RMSE vs. SNR', fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax4.grid(True, **IEEEStyle.GRID_PROPS)
+    ax4.legend(fontsize=IEEEStyle.FONT_SIZES['legend']-1)
+    ax4.set_ylim(1e-3, 1e2)
+    
+    plt.suptitle('THz ISL ISAC Performance Analysis', fontsize=IEEEStyle.FONT_SIZES['title']+2)
     plt.tight_layout()
-    plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: {save_name}.pdf and {save_name}.png")
+    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
 
 def plot_performance_summary(save_name='fig_performance_summary'):
-    """Plot performance summary comparison - IEEE style."""
+    """Plot performance summary comparison without bar value labels."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['large'])
@@ -549,7 +524,10 @@ def plot_performance_summary(save_name='fig_performance_summary'):
         snr_linear = 100  # 20 dB
         f_c = 300e9
         
-        rmse = 1000 * np.sqrt(1 / (snr_linear * (f_c/3e8)**2 * profile.Gamma_eff**(-1)))
+        # Include pointing error effect
+        pointing_loss = scenario.calculate_pointing_loss_factor(f_c, 1.0)
+        
+        rmse = 1000 * np.sqrt(1 / (snr_linear * (f_c/3e8)**2 * profile.Gamma_eff**(-1) * pointing_loss))
         ranging_rmse.append(rmse)
         
         cap = np.log2(1 + snr_linear / (1 + snr_linear * profile.Gamma_eff))
@@ -577,20 +555,6 @@ def plot_performance_summary(save_name='fig_performance_summary'):
                    label='HW Limit SNR', color=colors[2], 
                    alpha=0.8, edgecolor='black', linewidth=1)
     
-    # Add value labels
-    for bars, values in [(bars1, ranging_rmse), (bars2, capacity), (bars3, hw_limit_snr)]:
-        for bar, val in zip(bars, values):
-            height = bar.get_height()
-            if bars == bars1:
-                label = f'{val:.1f}\nmm'
-            elif bars == bars2:
-                label = f'{val:.1f}\nb/s'
-            else:
-                label = f'{val:.0f}\ndB'
-            ax.text(bar.get_x() + bar.get_width()/2, height + 0.02,
-                   label, ha='center', va='bottom', 
-                   fontsize=IEEEStyle.FONT_SIZES['annotation']-1)
-    
     # Labels
     ax.set_xlabel('Hardware Profile', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Normalized Performance', fontsize=IEEEStyle.FONT_SIZES['label'])
@@ -600,35 +564,35 @@ def plot_performance_summary(save_name='fig_performance_summary'):
     ax.set_xticklabels([p.replace('_', '\n') for p in profiles], 
                       fontsize=IEEEStyle.FONT_SIZES['tick'])
     ax.legend(loc='upper left', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    ax.set_ylim(0, 1.3)
+    ax.set_ylim(0, 1.2)
     ax.grid(True, axis='y', **IEEEStyle.GRID_PROPS)
     
     plt.tight_layout()
-    plt.savefig(f'{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"Saved: {save_name}.pdf and {save_name}.png")
+    print(f"Saved: results/{save_name}.pdf and results/{save_name}.png")
 
 def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
-                          max_iterations: int = 20) -> Tuple[float, np.ndarray]:
-    """Simplified C-D optimization for faster computation."""
+                          max_iterations: int = 20, n_mc: int = 50) -> Tuple[float, np.ndarray]:
+    """Simplified C-D optimization with MC averaging."""
     n_symbols = len(system.constellation)
     
     # Initialize with uniform distribution
     p_x = np.ones(n_symbols) / n_symbols
     
     # Check if already meets constraint
-    D_current = system.calculate_distortion(p_x)
+    D_current = system.calculate_distortion(p_x, n_mc=n_mc)
     if D_current <= D_target:
-        I_x = system.calculate_mutual_information(p_x)
+        I_x = system.calculate_mutual_information(p_x, n_mc=n_mc)
         return np.sum(p_x * I_x), p_x
     
     # Simple gradient-based optimization
     step_size = 0.1
     for _ in range(max_iterations):
         # Calculate gradient
-        I_x = system.calculate_mutual_information(p_x)
+        I_x = system.calculate_mutual_information(p_x, n_mc=n_mc)
         
         # Update towards higher power symbols if distortion too high
         if D_current > D_target:
@@ -642,7 +606,7 @@ def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
         p_x /= np.sum(p_x)
         
         # Check new distortion
-        D_current = system.calculate_distortion(p_x)
+        D_current = system.calculate_distortion(p_x, n_mc=n_mc)
     
     capacity = np.sum(p_x * I_x)
     return capacity, p_x
@@ -650,7 +614,7 @@ def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
 def main():
     """Main function to generate all capacity analysis plots."""
     print("=== THz ISL ISAC Capacity Analysis (IEEE Style) ===")
-    print("\nGenerating individual plots with adjustable font sizes...")
+    print("With pointing error Monte Carlo averaging")
     print(f"Current font sizes: {IEEEStyle.FONT_SIZES}")
     
     # Note about observability
@@ -659,18 +623,14 @@ def main():
     # Generate all individual plots
     plot_cd_frontier()
     plot_capacity_vs_snr()
-    plot_hardware_quality_impact()
-    plot_hardware_feasibility_map()
-    plot_antenna_power_tradeoff()
+    plot_2d_performance_analysis()  # Replaces 3D plots
     plot_performance_summary()
     
     print("\n=== Capacity Analysis Complete ===")
-    print("Generated files:")
+    print("Generated files in results/:")
     print("- fig_cd_frontier.pdf/png")
     print("- fig_capacity_vs_snr.pdf/png")
-    print("- fig_hardware_quality_impact.pdf/png")
-    print("- fig_hardware_feasibility.pdf/png")
-    print("- fig_antenna_power_tradeoff.pdf/png")
+    print("- fig_2d_performance_analysis.pdf/png")
     print("- fig_performance_summary.pdf/png")
 
 if __name__ == "__main__":

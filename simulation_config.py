@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
 simulation_config.py - IEEE Publication Style Configuration
+Updated with pointing error model and dynamic phase noise calculation
 """
 
 import numpy as np
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 import matplotlib.pyplot as plt
+import os
+
+# Create results directory if it doesn't exist
+os.makedirs('results', exist_ok=True)
 
 # =============================================================================
 # IEEE PUBLICATION STYLE CONFIGURATION
@@ -14,14 +19,14 @@ import matplotlib.pyplot as plt
 class IEEEStyle:
     """IEEE publication style settings for all plots."""
     
-    # Font sizes (easily adjustable)
+    # Font sizes (adjusted for better proportions)
     FONT_SIZES = {
-        'title': 16,        # Figure title
-        'label': 14,        # Axis labels
-        'tick': 12,         # Tick labels
-        'legend': 12,       # Legend text
-        'annotation': 11,   # Annotations
-        'text': 11,         # General text
+        'title': 14,        # Figure title (reduced from 16)
+        'label': 12,        # Axis labels (reduced from 14)
+        'tick': 10,         # Tick labels (reduced from 12)
+        'legend': 10,       # Legend text (reduced from 12)
+        'annotation': 9,    # Annotations (reduced from 11)
+        'text': 10,         # General text (reduced from 11)
     }
     
     # Figure sizes for single column and double column
@@ -29,14 +34,15 @@ class IEEEStyle:
         'single': (3.5, 2.8),    # Single column (inches)
         'double': (7.16, 4),     # Double column (inches)
         'custom': (5, 4),        # Custom size
-        'large': (6, 4.5),       # Large single figure
+        'large': (7, 5),         # Large single figure (increased)
+        'square': (5, 5),        # Square figure
     }
     
     # Line and marker properties
     LINE_PROPS = {
         'linewidth': 2.0,
-        'markersize': 7,
-        'markeredgewidth': 1.5,
+        'markersize': 6,         # Reduced from 7
+        'markeredgewidth': 1.2,  # Reduced from 1.5
         'markeredgecolor': 'white',
     }
     
@@ -148,6 +154,9 @@ class ScenarioParameters:
     v_rel_default: float = 10e3 # Default relative velocity [m/s] (10 km/s)
     a_rel_max: float = 100      # Maximum relative acceleration [m/s²]
     
+    # Pointing error parameters (NEW)
+    pointing_error_rms_rad: float = 1e-6  # RMS pointing error [rad] (1 µrad)
+    
     # Enhanced antenna parameters for THz
     antenna_options: Dict[str, float] = None
     power_options: Dict[str, float] = None
@@ -196,6 +205,33 @@ class ScenarioParameters:
         """Calculate beam rolloff factor γ = 2.77/θ_3dB² [rad⁻²]."""
         theta_3dB = self.beamwidth_3dB(frequency_hz, diameter)
         return 2.77 / (theta_3dB ** 2)
+    
+    def calculate_pointing_loss_factor(self, frequency_hz: float, diameter: float = None, 
+                                     pointing_error_rms: float = None) -> float:
+        """Calculate expected pointing loss factor due to random pointing errors."""
+        if pointing_error_rms is None:
+            pointing_error_rms = self.pointing_error_rms_rad
+        
+        gamma = self.beam_rolloff_factor(frequency_hz, diameter)
+        # Expected value of exp(-gamma * ||theta_e||^2) where ||theta_e||^2 ~ chi^2(2)
+        # E[exp(-gamma * X)] where X ~ chi^2(2) = 1 / (1 + 2*gamma*sigma^2)
+        return 1 / (1 + 2 * gamma * pointing_error_rms**2)
+    
+    def sample_pointing_loss(self, frequency_hz: float, diameter: float = None,
+                           pointing_error_rms: float = None, n_samples: int = 1) -> np.ndarray:
+        """Sample random pointing loss factors."""
+        if pointing_error_rms is None:
+            pointing_error_rms = self.pointing_error_rms_rad
+            
+        gamma = self.beam_rolloff_factor(frequency_hz, diameter)
+        
+        # Sample 2D Gaussian pointing errors
+        theta_x = np.random.normal(0, pointing_error_rms, n_samples)
+        theta_y = np.random.normal(0, pointing_error_rms, n_samples)
+        theta_squared = theta_x**2 + theta_y**2
+        
+        # Calculate pointing loss
+        return np.exp(-gamma * theta_squared)
 
 # =============================================================================
 # HARDWARE PROFILES
@@ -233,24 +269,25 @@ class HardwareProfile:
     
     @property
     def phase_noise_variance(self) -> float:
-        """Calculate phase noise variance σ_φ² [rad²]."""
+        """Calculate phase noise variance σ_φ² [rad²] using Wiener process model."""
+        # Updated to use consistent formula: σ_φ² = 2π * Δν * T
         delta_nu = self.components.LO_linewidth_Hz
         T = self.frame_duration_s
-        variance = (4/3) * np.pi * delta_nu * T
+        variance = 2 * np.pi * delta_nu * T
         return variance
     
     @property
     def coherence_time(self) -> float:
         """Estimate coherence time for σ_φ² ≈ 0.1 rad²."""
         delta_nu = self.components.LO_linewidth_Hz
-        return 0.1 / ((4/3) * np.pi * delta_nu)
+        return 0.1 / (2 * np.pi * delta_nu)
     
     @property
     def EVM_total_percent(self) -> float:
         """Total system EVM [%]."""
         return 100 * np.sqrt(self.Gamma_eff)
 
-# Hardware profiles
+# Hardware profiles with updated parameters
 HARDWARE_PROFILES = {
     "State_of_Art": HardwareProfile(
         name="State_of_Art",
@@ -379,15 +416,17 @@ class SimulationControl:
     SNR_dB_max: float = 50
     SNR_dB_points: int = 61
     
-    n_monte_carlo: int = 1000
+    n_monte_carlo: int = 1000  # Monte Carlo samples for pointing error
     n_pilots: int = 64
     
     f_c_sweep_points: int = 7
     gamma_eff_sweep: List[float] = None
+    pointing_error_sweep: List[float] = None  # NEW
     
     def __post_init__(self):
         """Initialize sweep arrays."""
         self.gamma_eff_sweep = np.logspace(-3, -1, 20).tolist()
+        self.pointing_error_sweep = [0.5e-6, 1e-6, 2e-6]  # [0.5, 1, 2] µrad
     
     @property
     def SNR_dB_array(self) -> np.ndarray:
@@ -498,3 +537,5 @@ if __name__ == "__main__":
     print("IEEE Style Configuration Loaded")
     print(f"Default font sizes: {IEEEStyle.FONT_SIZES}")
     print(f"Available figure sizes: {list(IEEEStyle.FIG_SIZES.keys())}")
+    print(f"Phase noise model: σ_φ² = 2π × Δν × T")
+    print(f"Pointing error RMS: {scenario.pointing_error_rms_rad*1e6:.1f} µrad")
