@@ -104,10 +104,45 @@ class ISACSystem:
             print(f"  Link Margin: {self.P_rx_dBm - 10*np.log10(self.N_0*1000):.1f} dB")
             self.__class__._link_budget_printed = True
     
-    def _calculate_bussgang_gain(self) -> float:
-        """Calculate Bussgang gain for PA nonlinearity."""
-        kappa = 10**(-7.0/10)  # 7 dB IBO
-        B = 1 - 1.5 * kappa + 1.875 * kappa**2
+    def _calculate_bussgang_gain(self, input_backoff_dB: float = 7.0) -> complex:
+        """Calculate exact Bussgang gain for soft-limiter PA with Gaussian input.
+        
+        For complex Gaussian input through soft-limiter PA, the Bussgang gain is:
+        B = E[U(x)x*]/E[|x|²] where U(·) is the PA transfer function
+        
+        Args:
+            input_backoff_dB: Input back-off in dB (IBO = P_in/P_sat)
+        
+        Returns:
+            Complex Bussgang gain coefficient
+        """
+        from scipy.special import erf, erfc
+        import numpy as np
+        
+        # Convert IBO from dB to linear
+        kappa = 10 ** (-input_backoff_dB / 10)  # kappa = P_in/A_sat²
+        
+        # For soft-limiter model with saturation level A_sat
+        # The exact Bussgang gain (derived in paper's Appendix) is:
+        
+        # Method 1: Using error functions (more numerically stable)
+        sqrt_kappa_inv = 1.0 / np.sqrt(kappa)
+        
+        # Exact formula for soft-limiter
+        B_magnitude = (1 - np.exp(-sqrt_kappa_inv**2)) + \
+                    np.sqrt(np.pi/(2*kappa)) * sqrt_kappa_inv * \
+                    erf(sqrt_kappa_inv) * np.exp(-sqrt_kappa_inv**2)
+        
+        # For soft-limiter, phase component is typically 0 for symmetric nonlinearity
+        B = complex(B_magnitude, 0)
+        
+        # Validation: Check against Taylor expansion for small kappa
+        if input_backoff_dB >= 10:  # High IBO, should match linear approximation
+            B_taylor = 1 - 1.5 * kappa + 1.875 * kappa**2
+            relative_error = abs(B_magnitude - B_taylor) / B_taylor
+            if relative_error > 0.05:  # More than 5% difference
+                print(f"Warning: Bussgang gain may be inaccurate at IBO={input_backoff_dB} dB")
+        
         return B
     
     def _create_constellation(self, modulation: str = 'QPSK') -> np.ndarray:
