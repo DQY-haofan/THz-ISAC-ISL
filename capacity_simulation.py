@@ -719,41 +719,44 @@ def plot_3d_capacity_landscape(save_name='fig_3d_capacity_landscape'):
     print(f"Saved: results/{save_name}_[views].pdf/png and data")
 
 def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
-                          max_iterations: int = 20, n_mc: int = 50) -> Tuple[float, np.ndarray]:
-    """Simplified C-D optimization with MC averaging."""
+                          max_iterations: int = 20, n_mc: int = 100) -> Tuple[float, np.ndarray]:
+    """Simplified C-D optimization for capacity plots.
+    
+    Uses a gradient-free approach suitable for visualization purposes.
+    """
     n_symbols = len(system.constellation)
+    symbol_powers = np.abs(system.constellation)**2
     
-    # Initialize with uniform distribution
-    p_x = np.ones(n_symbols) / n_symbols
+    # Check if uniform distribution meets constraint
+    p_uniform = np.ones(n_symbols) / n_symbols
+    D_uniform = system.calculate_distortion(p_uniform, n_mc=n_mc)
     
-    # Check if already meets constraint
-    D_current = system.calculate_distortion(p_x, n_mc=n_mc)
-    if D_current <= D_target:
-        I_x = system.calculate_mutual_information(p_x, n_mc=n_mc)
-        return np.sum(p_x * I_x), p_x
+    if D_uniform <= D_target:
+        I_x = system.calculate_mutual_information(p_uniform, n_mc=n_mc)
+        return np.sum(p_uniform * I_x), p_uniform
     
-    # Simple gradient-based optimization
-    step_size = 0.1
-    for _ in range(max_iterations):
-        # Calculate gradient
-        I_x = system.calculate_mutual_information(p_x, n_mc=n_mc)
+    # Try different power allocations
+    best_capacity = 0
+    best_p_x = p_uniform
+    
+    # Test various distributions between uniform and max-power
+    for alpha in np.linspace(0, 1, 20):
+        # Interpolate between uniform and power-focused
+        p_test = (1-alpha) * p_uniform + alpha * (symbol_powers/np.sum(symbol_powers))
         
-        # Update towards higher power symbols if distortion too high
-        if D_current > D_target:
-            symbol_powers = np.abs(system.constellation)**2
-            gradient = symbol_powers - np.mean(symbol_powers)
-        else:
-            gradient = I_x - np.mean(I_x)
+        # Check distortion
+        D_test = system.calculate_distortion(p_test, n_mc=n_mc)
         
-        # Update distribution
-        p_x = p_x * np.exp(step_size * gradient)
-        p_x /= np.sum(p_x)
-        
-        # Check new distortion
-        D_current = system.calculate_distortion(p_x, n_mc=n_mc)
+        if D_test <= D_target:
+            # Calculate capacity
+            I_x = system.calculate_mutual_information(p_test, n_mc=n_mc)
+            capacity = np.sum(p_test * I_x)
+            
+            if capacity > best_capacity:
+                best_capacity = capacity
+                best_p_x = p_test.copy()
     
-    capacity = np.sum(p_x * I_x)
-    return capacity, p_x
+    return best_capacity, best_p_x
 
 def main():
     """Main function to generate all capacity analysis plots."""
