@@ -134,90 +134,26 @@ class IEEEStyle:
 class DataSaver:
     """Utility class for saving numerical data."""
     
+    
     @staticmethod
     def save_data(filename: str, data: Dict, description: str = ""):
-        """Save data dictionary to JSON and text files."""
-        # Save as JSON for easy loading
-        json_path = f'results/data/{filename}.json'
-        with open(json_path, 'w') as f:
-            # Convert numpy arrays and complex numbers to JSON-serializable format
-            json_data = {}
-            for key, value in data.items():
-                if isinstance(value, np.ndarray):
-                    # Convert to list and handle complex numbers
-                    if np.iscomplexobj(value):
-                        json_data[key] = np.real(value).tolist()
-                    else:
-                        json_data[key] = value.tolist()
-                elif isinstance(value, complex):
-                    # Store only real part for complex scalars
-                    json_data[key] = float(np.real(value))
-                elif isinstance(value, (list, tuple)):
-                    # Check if list contains complex numbers
-                    cleaned_list = []
-                    for item in value:
-                        if isinstance(item, complex):
-                            cleaned_list.append(float(np.real(item)))
-                        elif isinstance(item, np.ndarray):
-                            if np.iscomplexobj(item):
-                                cleaned_list.append(np.real(item).tolist())
-                            else:
-                                cleaned_list.append(item.tolist())
-                        else:
-                            cleaned_list.append(item)
-                    json_data[key] = cleaned_list
-                else:
-                    json_data[key] = value
-            json.dump(json_data, f, indent=2)
+        """Add data to global diagnostics instead of separate files."""
+        from diagnostics import diagnostics
         
-        # Save as formatted text for human reading
-        txt_path = f'results/data/{filename}.txt'
-        with open(txt_path, 'w') as f:
-            f.write(f"# {description}\n")
-            f.write(f"# Generated at: {np.datetime64('now')}\n")
-            f.write("#" + "="*60 + "\n\n")
-            
-            for key, value in data.items():
-                f.write(f"# {key}:\n")
-                if isinstance(value, (list, np.ndarray)):
-                    if len(value) > 0:
-                        if isinstance(value[0], (list, np.ndarray)):
-                            # 2D array
-                            for row in value:
-                                # Check if numeric before formatting
-                                if all(isinstance(v, (int, float, np.number, complex)) for v in row):
-                                    # Handle complex numbers
-                                    formatted_row = []
-                                    for v in row:
-                                        if isinstance(v, complex):
-                                            formatted_row.append(f'{np.real(v):.6e}')
-                                        else:
-                                            formatted_row.append(f'{v:.6e}')
-                                    f.write(' '.join(formatted_row) + '\n')
-                                else:
-                                    f.write(' '.join(str(v) for v in row) + '\n')
-                        else:
-                            # 1D array
-                            for v in value:
-                                # Check if numeric before formatting
-                                if isinstance(v, (int, float, np.number, complex)):
-                                    if isinstance(v, complex):
-                                        f.write(f'{np.real(v):.6e}\n')
-                                    else:
-                                        f.write(f'{v:.6e}\n')
-                                else:
-                                    f.write(f'{v}\n')
-                else:
-                    # Single value
-                    if isinstance(value, (int, float, np.number)):
-                        f.write(f'{value:.6e}\n')
-                    elif isinstance(value, complex):
-                        f.write(f'{np.real(value):.6e}\n')
-                    else:
-                        f.write(f'{value}\n')
-                f.write('\n')
+        # Add to diagnostics results
+        diagnostics.results[filename] = {
+            'description': description,
+            'data': data
+        }
         
-        print(f"  Data saved to: {json_path} and {txt_path}")
+        # Extract key metrics
+        for key, value in data.items():
+            if 'capacity' in key.lower() and isinstance(value, (int, float)):
+                diagnostics.add_key_metric("Summary", f"{filename}_{key}", value)
+            elif 'rmse' in key.lower() and isinstance(value, (int, float)):
+                diagnostics.add_key_metric("Summary", f"{filename}_{key}", value)
+        
+        print(f"  Data added to comprehensive report: {filename}")
 
 # =============================================================================
 # PHYSICAL CONSTANTS (SI UNITS)

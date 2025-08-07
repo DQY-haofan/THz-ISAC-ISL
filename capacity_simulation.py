@@ -3,7 +3,7 @@
 capacity_simulation.py - IEEE Publication Style with Individual Plots
 Updated with data saving, 3D plots, and 1THz support
 """
-
+from diagnostics import diagnostics
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -39,9 +39,9 @@ class EnhancedISACSystem:
     """Enhanced THz ISL ISAC system with IEEE publication style and pointing error."""
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
-                 distance: float = 2000e3, n_pilots: int = 64,
-                 antenna_diameter: float = None,
-                 tx_power_dBm: float = None):
+             distance: float = 2000e3, n_pilots: int = 64,
+             antenna_diameter: float = None,
+             tx_power_dBm: float = None):
         """Initialize with enhanced parameters."""
         self.profile = HARDWARE_PROFILES[hardware_profile]
         self.f_c = f_c
@@ -59,6 +59,43 @@ class EnhancedISACSystem:
         
         # Constellation
         self.constellation = self._create_constellation()
+        
+        # Add diagnostics for first initialization only
+        if not hasattr(self.__class__, '_diagnostics_logged'):
+            self._log_diagnostics()
+            self.__class__._diagnostics_logged = True
+
+    def _log_diagnostics(self):
+        """Log key system parameters for diagnostics."""
+        # Physical parameters
+        diagnostics.add_key_metric("Physical", "Frequency_GHz", self.f_c/1e9, 
+                                (10, 1000), "GHz")
+        diagnostics.add_key_metric("Physical", "Distance_km", self.distance/1e3,
+                                (100, 10000), "km")
+        diagnostics.add_key_metric("Physical", "Antenna_diameter_m", self.antenna_diameter,
+                                (0.1, 5), "m")
+        
+        # Link budget
+        diagnostics.add_key_metric("LinkBudget", "TxPower_dBm", self.tx_power_dBm,
+                                (0, 40), "dBm")
+        diagnostics.add_key_metric("LinkBudget", "PathLoss_dB", self.path_loss_dB,
+                                (150, 250), "dB")
+        diagnostics.add_key_metric("LinkBudget", "RxPower_dBm", self.P_rx_dBm,
+                                (-80, 0), "dBm")
+        diagnostics.add_key_metric("LinkBudget", "LinkMargin_dB", self.link_margin_dB,
+                                (0, 50), "dB")
+        
+        # Hardware impairments
+        diagnostics.add_key_metric("Hardware", f"Gamma_eff_{self.profile.name}", 
+                                self.profile.Gamma_eff, (1e-4, 1e-1), "")
+        diagnostics.add_key_metric("Hardware", f"PhaseNoiseVar_{self.profile.name}_rad2", 
+                                self.profile.phase_noise_variance, (0, 10), "rad²")
+        diagnostics.add_key_metric("Hardware", f"BussgangGain_{self.profile.name}", 
+                                np.abs(self.bussgang_gain), (0.5, 1.0), "")
+        
+        # Channel
+        diagnostics.add_key_metric("Channel", "ChannelGain_linear", 
+                                np.abs(self.channel_gain), (0, 1), "")
     
     def _calculate_link_budget(self):
         """Calculate link budget with given parameters."""
@@ -731,16 +768,22 @@ def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
 def main():
     """Main function to generate all capacity analysis plots."""
     print("=== THz ISL ISAC Capacity Analysis (IEEE Style) ===")
-    print("With data saving and 3D visualizations")
-    print(f"Default SNR: {simulation.default_SNR_dB} dB")
-    print(f"Default antenna: {scenario.default_antenna_diameter} m")
-    print(f"Default TX power: {scenario.default_tx_power_dBm} dBm")
-    print(f"Frequency range: up to {scenario.f_c_max/1e9:.0f} GHz")
+    print("With unified diagnostics and data collection")
+    
+    # Clear previous diagnostics
+    diagnostics.results.clear()
+    diagnostics.warnings.clear()
+    diagnostics.key_metrics.clear()
     
     # Note about observability
     print("\nNOTE: Analysis based on single ISL (2 observable parameters)")
     
-    # Generate all individual plots
+    # Run all analyses with diagnostics
+    print("\n" + "="*70)
+    print("RUNNING ANALYSES WITH DIAGNOSTICS")
+    print("="*70)
+    
+    # Each plot function will add its results to diagnostics
     plot_cd_frontier()
     plot_capacity_vs_snr()
     plot_capacity_vs_frequency()
@@ -748,14 +791,13 @@ def main():
     plot_hardware_quality_impact()
     plot_3d_capacity_landscape()
     
+    # Print diagnostics summary
+    diagnostics.print_summary()
+    
+    # Save comprehensive report
+    diagnostics.save_comprehensive_report("capacity_analysis_complete")
+    
     print("\n=== Capacity Analysis Complete ===")
-    print("Generated files in results/:")
-    print("- fig_cd_frontier.pdf/png + data")
-    print("- fig_capacity_vs_snr.pdf/png + data")
-    print("- fig_capacity_vs_frequency.pdf/png + data")
-    print("- fig_capacity_vs_distance.pdf/png + data")
-    print("- fig_hardware_quality_impact.pdf/png + data")
-    print("- fig_3d_capacity_landscape_[views].pdf/png + data")
 
 if __name__ == "__main__":
     main()
