@@ -923,75 +923,137 @@ def modified_blahut_arimoto(system: ISACSystem, D_target: float,
                            max_iterations: int = 50,
                            n_mc: int = 100,
                            verbose: bool = False) -> Tuple[float, np.ndarray]:
-    """Modified Blahut-Arimoto for ISAC with MC averaging."""
+    """Simplified but effective Modified Blahut-Arimoto for C-D trade-off.
+    
+    This implementation uses a practical approach:
+    1. Use water-filling inspired initialization
+    2. Iteratively adjust distribution based on capacity-distortion gradient
+    3. Binary search on Lagrange multiplier for constraint satisfaction
+    
+    Args:
+        system: ISAC system instance
+        D_target: Target distortion constraint
+        P_tx_scale: Transmit power scaling factor
+        epsilon_lambda: Convergence threshold for Lagrange multiplier
+        epsilon_p: Convergence threshold for distribution
+        max_iterations: Maximum inner loop iterations
+        n_mc: Monte Carlo samples for averaging
+        verbose: Print optimization progress
+    
+    Returns:
+        Tuple of (capacity, optimal distribution)
+    """
     n_symbols = len(system.constellation)
+    symbol_powers = np.abs(system.constellation)**2
     
-    # Smart initialization
-    if D_target > 1e6:
-        p_x = np.ones(n_symbols) / n_symbols
-    else:
-        symbol_powers = np.abs(system.constellation)**2
-        p_x = symbol_powers / np.sum(symbol_powers)
+    # Smart initialization based on constraint tightness
+    p_uniform = np.ones(n_symbols) / n_symbols
+    D_uniform = system.calculate_distortion(p_uniform, P_tx_scale, n_mc)
     
-    # Check if uniform distribution already meets target
-    D_uniform = system.calculate_distortion(p_x, P_tx_scale, n_mc)
     if D_uniform <= D_target:
-        I_x = system.calculate_mutual_information(p_x, P_tx_scale, n_mc)
-        return np.sum(p_x * I_x), p_x
+        # Uniform already satisfies constraint
+        I_x = system.calculate_mutual_information(p_uniform, P_tx_scale, n_mc)
+        return np.sum(p_uniform * I_x), p_uniform
     
-    # Binary search for Lagrange multiplier
-    lambda_min, lambda_max = 0, 1e6
+    # Initialize with power-weighted distribution for tight constraints
+    p_x = symbol_powers / np.sum(symbol_powers)
     
-    iteration_count = 0
-    while (lambda_max - lambda_min) > epsilon_lambda and iteration_count < 20:
+    # Binary search for optimal Lagrange multiplier
+    lambda_min = 0.0
+    lambda_max = 1000.0  # Upper bound for lambda
+    
+    best_capacity = 0
+    best_p_x = p_x.copy()
+    
+    for outer_iter in range(30):  # Limit outer iterations
         lambda_current = (lambda_min + lambda_max) / 2
-        iteration_count += 1
         
-        p_x = np.ones(n_symbols) / n_symbols
+        # Inner loop: optimize distribution for fixed lambda
+        p_x = best_p_x.copy() if outer_iter > 0 else p_x
         
-        # Inner optimization
         for inner_iter in range(max_iterations):
-            p_x_prev = p_x.copy()
+            p_x_old = p_x.copy()
             
+            # Calculate mutual information for each symbol
             I_x = system.calculate_mutual_information(p_x, P_tx_scale, n_mc)
             
-            # Numerical gradient
-            grad_D = np.zeros(n_symbols)
-            base_D = system.calculate_distortion(p_x, P_tx_scale, n_mc)
+            # Calculate distortion and its gradient
+            D_current = system.calculate_distortion(p_x, P_tx_scale, n_mc)
             
+            # Approximate gradient of distortion w.r.t. distribution
+            # Using finite differences for robustness
+            grad_D = np.zeros(n_symbols)
             delta = 0.01
             for i in range(n_symbols):
                 if p_x[i] > delta:
+                    # Create perturbed distribution
                     p_perturb = p_x.copy()
-                    p_perturb[i] -= delta
-                    p_perturb[(i+1) % n_symbols] += delta
+                    p_perturb[i] -= delta/2
+                    p_perturb[(i+1) % n_symbols] += delta/2
                     
-                    D_perturb = system.calculate_distortion(p_perturb, P_tx_scale, n_mc)
-                    grad_D[i] = (D_perturb - base_D) / delta
+                    # Calculate gradient component
+                    D_perturb = system.calculate_distortion(p_perturb, P_tx_scale, n_mc//2)
+                    grad_D[i] = (D_perturb - D_current) / (delta/2)
             
-            # Update in log domain
-            log_p = np.log(p_x + 1e-10)
-            log_p += 0.1 * (I_x - lambda_current * grad_D)
+            # Compute update direction (gradient of Lagrangian)
+            gradient = I_x - lambda_current * grad_D
             
-            # Normalize
-            log_p -= np.max(log_p)
+            # Exponentiated gradient update (maintains simplex constraint)
+            step_size = 0.5 / (1 + inner_iter/10)  # Decreasing step size
+            log_p = np.log(p_x + 1e-20)
+            log_p += step_size * gradient
+            log_p -= np.max(log_p)  # Numerical stability
+            
+            # Update distribution
             p_x = np.exp(log_p)
             p_x /= np.sum(p_x)
             
             # Check convergence
-            if np.linalg.norm(p_x - p_x_prev, ord=1) < epsilon_p:
+            if np.sum(np.abs(p_x - p_x_old)) < epsilon_p:
                 break
         
-        # Check constraint
-        D_current = system.calculate_distortion(p_x, P_tx_scale, n_mc)
+        # Evaluate final capacity and distortion
+        I_x_final = system.calculate_mutual_information(p_x, P_tx_scale, n_mc)
+        capacity = np.sum(p_x * I_x_final)
+        D_final = system.calculate_distortion(p_x, P_tx_scale, n_mc)
         
-        if D_current > D_target:
-            lambda_min = lambda_current
+        if verbose and outer_iter % 5 == 0:
+            print(f"  Outer iter {outer_iter}: λ={lambda_current:.3e}, "
+                  f"C={capacity:.3f} bits/symbol, D={D_final:.3e} (target={D_target:.3e})")
+        
+        # Update best solution if improved
+        if capacity > best_capacity and D_final <= D_target * 1.05:  # 5% tolerance
+            best_capacity = capacity
+            best_p_x = p_x.copy()
+        
+        # Update lambda bounds based on constraint satisfaction
+        if D_final > D_target:
+            lambda_min = lambda_current  # Need more penalty
         else:
-            lambda_max = lambda_current
+            lambda_max = lambda_current  # Can reduce penalty
+        
+        # Check convergence
+        if abs(lambda_max - lambda_min) < epsilon_lambda:
+            if verbose:
+                print(f"  Converged at λ={lambda_current:.3e}")
+            break
     
-    capacity = np.sum(p_x * I_x)
-    return capacity, p_x
+    # Final check and adjustment
+    D_best = system.calculate_distortion(best_p_x, P_tx_scale, n_mc)
+    if D_best > D_target * 1.1:  # If still violates constraint significantly
+        # Fall back to more conservative distribution
+        alpha = 0.5
+        while alpha > 0.1:
+            p_mixed = alpha * best_p_x + (1-alpha) * p_uniform
+            D_mixed = system.calculate_distortion(p_mixed, P_tx_scale, n_mc)
+            if D_mixed <= D_target:
+                best_p_x = p_mixed
+                I_x_mixed = system.calculate_mutual_information(p_mixed, P_tx_scale, n_mc)
+                best_capacity = np.sum(p_mixed * I_x_mixed)
+                break
+            alpha *= 0.8
+    
+    return best_capacity, best_p_x
 
 def main():
     """Main function with all analyses."""
