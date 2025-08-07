@@ -119,24 +119,19 @@ class EnhancedISACSystem:
         # Noise parameters
         self.noise_figure_dB = 8
         self.bandwidth_Hz = self.profile.signal_bandwidth_Hz
+        
+        # Thermal noise power
         self.noise_power_watts = DerivedParameters.thermal_noise_power(
             self.bandwidth_Hz, noise_figure_dB=self.noise_figure_dB
         )
         self.N_0 = self.noise_power_watts
+        
+        # FIXED: Noise power in dBm (was calculating wrong)
         self.noise_power_dBm = 10 * np.log10(self.noise_power_watts * 1000)
         
-        # CORRECTED: Channel gain (includes path loss and antenna gains)
-        # Channel gain |g|² = (Gt * Gr * (λ/4πd)²)
-        G_tx_linear = 10**(self.G_tx_dB/10)
-        G_rx_linear = 10**(self.G_rx_dB/10)
-        path_loss_linear = 10**(-self.path_loss_dB/10)
-        
-        # Total channel gain magnitude |g|
-        self.channel_gain = np.sqrt(G_tx_linear * G_rx_linear * path_loss_linear)
-        
-        # Link margin
-        self.link_margin_dB = self.P_rx_dBm - self.noise_power_dBm - 10 * np.log10(self.bandwidth_Hz)
-        
+        # FIXED: Link margin should compare Rx power to noise power
+        self.link_margin_dB = self.P_rx_dBm - self.noise_power_dBm
+    
     def _calculate_bussgang_gain(self, input_backoff_dB: float = 7.0) -> float:
         """Calculate Bussgang gain for PA nonlinearity."""
         kappa = 10 ** (-input_backoff_dB / 10)
