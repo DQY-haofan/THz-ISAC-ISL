@@ -14,6 +14,8 @@ from typing import Tuple, Dict, List
 import itertools
 import os
 from tqdm import tqdm
+from scipy.special import erf, erfc
+import numpy as np
 
 # Import configuration
 from simulation_config import (
@@ -54,7 +56,8 @@ class EnhancedCRLBAnalyzer:
         """Calculate Bussgang gain for PA nonlinearity."""
         kappa = 10 ** (-input_backoff_dB / 10)
         B = 1 - 1.5 * kappa + 1.875 * kappa**2
-        return B
+        # Ensure real value
+        return float(np.real(B))
     
     def calculate_effective_noise_variance_mc(
         self, SNR_linear: float, channel_gain: float, hardware_profile: str,

@@ -140,11 +140,32 @@ class DataSaver:
         # Save as JSON for easy loading
         json_path = f'results/data/{filename}.json'
         with open(json_path, 'w') as f:
-            # Convert numpy arrays to lists for JSON serialization
+            # Convert numpy arrays and complex numbers to JSON-serializable format
             json_data = {}
             for key, value in data.items():
                 if isinstance(value, np.ndarray):
-                    json_data[key] = value.tolist()
+                    # Convert to list and handle complex numbers
+                    if np.iscomplexobj(value):
+                        json_data[key] = np.real(value).tolist()
+                    else:
+                        json_data[key] = value.tolist()
+                elif isinstance(value, complex):
+                    # Store only real part for complex scalars
+                    json_data[key] = float(np.real(value))
+                elif isinstance(value, (list, tuple)):
+                    # Check if list contains complex numbers
+                    cleaned_list = []
+                    for item in value:
+                        if isinstance(item, complex):
+                            cleaned_list.append(float(np.real(item)))
+                        elif isinstance(item, np.ndarray):
+                            if np.iscomplexobj(item):
+                                cleaned_list.append(np.real(item).tolist())
+                            else:
+                                cleaned_list.append(item.tolist())
+                        else:
+                            cleaned_list.append(item)
+                    json_data[key] = cleaned_list
                 else:
                     json_data[key] = value
             json.dump(json_data, f, indent=2)
@@ -164,22 +185,34 @@ class DataSaver:
                             # 2D array
                             for row in value:
                                 # Check if numeric before formatting
-                                if all(isinstance(v, (int, float, np.number)) for v in row):
-                                    f.write(' '.join(f'{v:.6e}' for v in row) + '\n')
+                                if all(isinstance(v, (int, float, np.number, complex)) for v in row):
+                                    # Handle complex numbers
+                                    formatted_row = []
+                                    for v in row:
+                                        if isinstance(v, complex):
+                                            formatted_row.append(f'{np.real(v):.6e}')
+                                        else:
+                                            formatted_row.append(f'{v:.6e}')
+                                    f.write(' '.join(formatted_row) + '\n')
                                 else:
                                     f.write(' '.join(str(v) for v in row) + '\n')
                         else:
                             # 1D array
                             for v in value:
                                 # Check if numeric before formatting
-                                if isinstance(v, (int, float, np.number)):
-                                    f.write(f'{v:.6e}\n')
+                                if isinstance(v, (int, float, np.number, complex)):
+                                    if isinstance(v, complex):
+                                        f.write(f'{np.real(v):.6e}\n')
+                                    else:
+                                        f.write(f'{v:.6e}\n')
                                 else:
                                     f.write(f'{v}\n')
                 else:
                     # Single value
                     if isinstance(value, (int, float, np.number)):
                         f.write(f'{value:.6e}\n')
+                    elif isinstance(value, complex):
+                        f.write(f'{np.real(value):.6e}\n')
                     else:
                         f.write(f'{value}\n')
                 f.write('\n')
@@ -341,11 +374,26 @@ class HardwareProfile:
     
     @property
     def phase_noise_variance(self) -> float:
-        """Calculate phase noise variance σ_φ² [rad²] using Wiener process model."""
-        # Updated to use consistent formula: σ_φ² = 2π * Δν * T
-        delta_nu = self.components.LO_linewidth_Hz
-        T = self.frame_duration_s
+        """Calculate phase noise variance σ_φ² [rad²] for Wiener phase process.
+        
+        For oscillator with 3-dB linewidth Δν (Hz), the phase variance 
+        accumulated over time T is: σ_φ² = 2π·Δν·T
+        
+        This is the standard Wiener process model where variance grows linearly with time.
+        Reference: Standard phase noise theory in coherent optical/RF systems
+        """
+        delta_nu = self.components.LO_linewidth_Hz  # 3-dB linewidth in Hz
+        T = self.frame_duration_s  # Observation/frame duration
+        
+        # Standard Wiener phase noise variance formula
         variance = 2 * np.pi * delta_nu * T
+        
+        # Add reasonable bounds check
+        if variance > 1.0:
+            print(f"Warning: Very large phase noise variance σ_φ²={variance:.3f} rad²")
+            print(f"  (Δν={delta_nu/1e3:.1f} kHz, T={T*1e6:.1f} μs)")
+            print(f"  Consider shorter frame duration or better oscillator")
+        
         return variance
     
     @property

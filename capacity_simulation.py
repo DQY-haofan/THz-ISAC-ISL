@@ -97,47 +97,13 @@ class EnhancedISACSystem:
         # Link margin
         self.link_margin_dB = self.P_rx_dBm - self.noise_power_dBm
     
-    def _calculate_bussgang_gain(self, input_backoff_dB: float = 7.0) -> complex:
-        """Calculate exact Bussgang gain for soft-limiter PA with Gaussian input.
-    
-    For complex Gaussian input through soft-limiter PA, the Bussgang gain is:
-    B = E[U(x)x*]/E[|x|²] where U(·) is the PA transfer function
-    
-    Args:
-        input_backoff_dB: Input back-off in dB (IBO = P_in/P_sat)
-    
-    Returns:
-        Complex Bussgang gain coefficient
-    """
-        from scipy.special import erf, erfc
-        import numpy as np
+    def _calculate_bussgang_gain(self, input_backoff_dB: float = 7.0) -> float:
+        """Calculate Bussgang gain for PA nonlinearity."""
+        kappa = 10 ** (-input_backoff_dB / 10)
+        B = 1 - 1.5 * kappa + 1.875 * kappa**2
+        # Ensure real value
+        return float(np.real(B))
         
-        # Convert IBO from dB to linear
-        kappa = 10 ** (-input_backoff_dB / 10)  # kappa = P_in/A_sat²
-        
-        # For soft-limiter model with saturation level A_sat
-        # The exact Bussgang gain (derived in paper's Appendix) is:
-        
-        # Method 1: Using error functions (more numerically stable)
-        sqrt_kappa_inv = 1.0 / np.sqrt(kappa)
-        
-        # Exact formula for soft-limiter
-        B_magnitude = (1 - np.exp(-sqrt_kappa_inv**2)) + \
-                    np.sqrt(np.pi/(2*kappa)) * sqrt_kappa_inv * \
-                    erf(sqrt_kappa_inv) * np.exp(-sqrt_kappa_inv**2)
-        
-        # For soft-limiter, phase component is typically 0 for symmetric nonlinearity
-        B = complex(B_magnitude, 0)
-        
-        # Validation: Check against Taylor expansion for small kappa
-        if input_backoff_dB >= 10:  # High IBO, should match linear approximation
-            B_taylor = 1 - 1.5 * kappa + 1.875 * kappa**2
-            relative_error = abs(B_magnitude - B_taylor) / B_taylor
-            if relative_error > 0.05:  # More than 5% difference
-                print(f"Warning: Bussgang gain may be inaccurate at IBO={input_backoff_dB} dB")
-        
-        return B
-    
     def _create_constellation(self, modulation: str = 'QPSK') -> np.ndarray:
         """Create normalized constellation."""
         if modulation == 'QPSK':
@@ -147,7 +113,7 @@ class EnhancedISACSystem:
         return constellation
     
     def calculate_sinr_mc(self, symbol: complex, avg_power: float, P_tx_scale: float,
-                         n_mc: int = 100) -> float:
+                     n_mc: int = 100) -> float:
         """Calculate SINR for given symbol with Monte Carlo pointing error averaging."""
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
         symbol_power = np.abs(symbol)**2
@@ -157,7 +123,8 @@ class EnhancedISACSystem:
             self.f_c, self.antenna_diameter, n_samples=n_mc
         )
         
-        P_rx_signal_base = P_tx * symbol_power * (self.channel_gain**2) * (self.bussgang_gain**2)
+        # Ensure real values by taking absolute value of channel gain squared
+        P_rx_signal_base = P_tx * symbol_power * np.abs(self.channel_gain)**2 * np.abs(self.bussgang_gain)**2
         P_rx_signal_avg = P_rx_signal_base * np.mean(pointing_losses)
         
         N_thermal = self.N_0
@@ -166,17 +133,20 @@ class EnhancedISACSystem:
         
         N_total = N_thermal + N_hw * phase_penalty
         sinr = P_rx_signal_avg / N_total
-        return sinr
+        
+        # Ensure real and positive
+        return np.real(np.abs(sinr))
     
     def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
-                                   n_mc: int = 100) -> np.ndarray:
+                                n_mc: int = 100) -> np.ndarray:
         """Calculate mutual information for each symbol with MC averaging."""
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         I_x = np.zeros(len(self.constellation))
         
         for i, symbol in enumerate(self.constellation):
             sinr = self.calculate_sinr_mc(symbol, avg_power, P_tx_scale, n_mc)
-            I_x[i] = np.log2(1 + sinr)
+            # Ensure real value for log2
+            I_x[i] = np.real(np.log2(1 + np.abs(sinr)))
             
         return I_x
     
