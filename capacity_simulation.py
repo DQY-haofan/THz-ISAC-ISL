@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 capacity_simulation.py - IEEE Publication Style with Individual Plots
-Updated with data saving, 3D plots, and 1THz support
+Updated with data saving, 3D plots, 1THz support, and integrated diagnostics
 """
 from diagnostics import diagnostics
 import numpy as np
@@ -15,7 +15,6 @@ from scipy.linalg import inv
 from tqdm import tqdm
 import os
 from scipy.special import erf, erfc
-import numpy as np
 
 # Import configuration
 from simulation_config import (
@@ -277,7 +276,7 @@ class EnhancedISACSystem:
         return distortion
 
 # =========================================================================
-# INDIVIDUAL PLOT FUNCTIONS
+# INDIVIDUAL PLOT FUNCTIONS WITH INTEGRATED DIAGNOSTICS
 # =========================================================================
 
 def plot_cd_frontier(save_name='fig_cd_frontier'):
@@ -325,6 +324,28 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
             
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
             data_to_save[f'capacity_{profile_name}'] = capacities
+            
+            # Add to diagnostics
+            diagnostics.add_key_metric(
+                "CD_Frontier", 
+                f"{profile_name}_MaxCapacity", 
+                max(capacities) if capacities else 0, 
+                (0, 10), 
+                "bits/symbol"
+            )
+            diagnostics.add_key_metric(
+                "CD_Frontier",
+                f"{profile_name}_MinRMSE",
+                min(ranging_rmse_mm) if ranging_rmse_mm.size > 0 else 1e10,
+                (0.001, 1000),
+                "mm"
+            )
+            
+            # Store raw data in results
+            diagnostics.results[f'cd_frontier_{profile_name}'] = {
+                'capacities': capacities,
+                'ranging_rmse_mm': ranging_rmse_mm.tolist()
+            }
             
             profile = HARDWARE_PROFILES[profile_name]
             
@@ -397,6 +418,34 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
         data_to_save[f'capacity_{profile_name}'] = results['capacity'].tolist()
         data_to_save[f'ceiling_{profile_name}'] = results['ceiling']
         
+        # Add to diagnostics
+        diagnostics.add_key_metric(
+            "Capacity_vs_SNR",
+            f"{profile_name}_Ceiling",
+            results['ceiling'],
+            (0, 20),
+            "bits/symbol"
+        )
+        diagnostics.add_key_metric(
+            "Capacity_vs_SNR",
+            f"{profile_name}_MaxCapacity",
+            np.max(results['capacity']),
+            (0, 20),
+            "bits/symbol"
+        )
+        
+        # Find SNR where capacity reaches 95% of ceiling
+        hw_limit_snr = DerivedParameters.find_snr_for_hardware_limit(
+            system.profile.Gamma_eff, 0.95
+        )
+        diagnostics.add_key_metric(
+            "Capacity_vs_SNR",
+            f"{profile_name}_SNR_95pct_ceiling",
+            hw_limit_snr,
+            (20, 60),
+            "dB"
+        )
+        
         # Plot capacity
         ax.plot(snr_dB_array, results['capacity'], 
                color=colors[idx], 
@@ -409,9 +458,6 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
                   linestyle='--', alpha=0.5, linewidth=1.5)
         
         # Mark transition point
-        hw_limit_snr = DerivedParameters.find_snr_for_hardware_limit(
-            system.profile.Gamma_eff, 0.95
-        )
         ax.axvline(x=hw_limit_snr, color=colors[idx], 
                   linestyle=':', alpha=0.3, linewidth=1.2)
     
@@ -474,6 +520,15 @@ def plot_capacity_vs_frequency(save_name='fig_capacity_vs_frequency'):
             capacities.append(np.mean(I_x))
         
         data_to_save[f'capacity_{d_km}km'] = capacities
+        
+        # Add key metrics to diagnostics
+        diagnostics.add_key_metric(
+            "Frequency_Analysis",
+            f"Capacity_at_1THz_{d_km}km",
+            capacities[-1] if f_GHz == 1000 else 0,
+            (0, 10),
+            "bits/symbol"
+        )
         
         ax.plot(frequencies_GHz, capacities, 
                 color=colors[idx], linewidth=IEEEStyle.LINE_PROPS['linewidth'],
@@ -538,6 +593,15 @@ def plot_capacity_vs_distance(save_name='fig_capacity_vs_distance'):
         
         data_to_save[f'capacity_{f_GHz}GHz'] = capacities
         
+        # Add key metrics
+        diagnostics.add_key_metric(
+            "Distance_Analysis",
+            f"Capacity_{f_GHz}GHz_at_2000km",
+            capacities[np.argmin(np.abs(distances_km - 2000))],
+            (0, 10),
+            "bits/symbol"
+        )
+        
         ax.plot(distances_km, capacities, 
                 color=colors[idx], linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                 marker=markers[idx], markersize=IEEEStyle.LINE_PROPS['markersize'],
@@ -595,6 +659,16 @@ def plot_hardware_quality_impact(save_name='fig_hardware_quality_impact'):
             custom_profile.Gamma_eff = original_gamma
         
         data_to_save[f'capacity_snr{snr_dB}dB'] = capacities
+        
+        # Add diagnostics for key SNR level (40 dB)
+        if snr_dB == 40:
+            diagnostics.add_key_metric(
+                "Hardware_Quality",
+                "Capacity_at_Gamma_0.01",
+                capacities[np.argmin(np.abs(gamma_eff_range - 0.01))],
+                (0, 10),
+                "bits/symbol"
+            )
         
         ax.semilogx(gamma_eff_range, capacities, 
                    color=colors[idx],
@@ -667,6 +741,30 @@ def plot_3d_capacity_landscape(save_name='fig_3d_capacity_landscape'):
             p_x = np.ones(len(system.constellation)) / len(system.constellation)
             I_x = system.calculate_mutual_information(p_x, n_mc=50)
             capacity_grid[i, j] = np.mean(I_x)
+    
+    # Add to diagnostics
+    diagnostics.add_key_metric(
+        "3D_Landscape",
+        "Max_Capacity",
+        np.max(capacity_grid),
+        (0, 10),
+        "bits/symbol"
+    )
+    diagnostics.add_key_metric(
+        "3D_Landscape",
+        "Min_Capacity",
+        np.min(capacity_grid),
+        (0, 10),
+        "bits/symbol"
+    )
+    diagnostics.add_key_metric(
+        "3D_Landscape",
+        "Capacity_1THz_2000km",
+        capacity_grid[np.argmin(np.abs(distances_km - 2000)), 
+                     np.argmin(np.abs(frequencies_GHz - 1000))],
+        (0, 10),
+        "bits/symbol"
+    )
     
     # Data storage
     data_to_save = {
