@@ -285,8 +285,9 @@ class EnhancedISACSystem:
 # INDIVIDUAL PLOT FUNCTIONS WITH INTEGRATED DIAGNOSTICS
 # =========================================================================
 
+# 替换 plot_cd_frontier 函数
 def plot_cd_frontier(save_name='fig_cd_frontier'):
-    """Plot C-D frontier for all hardware profiles - IEEE style."""
+    """Plot C-D frontier for all hardware profiles with complete curves."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
@@ -305,37 +306,55 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         print(f"  Processing {profile_name}...")
         system = EnhancedISACSystem(profile_name)
         
-        # Generate C-D points
-        n_points = 12
+        # Generate complete C-D frontier using power sweep
+        P_tx_scales = np.logspace(-2, +2, 80)  # Wide power range
         distortions = []
         capacities = []
         
-        # Find distortion range
         p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        D_max = system.calculate_distortion(p_uniform, n_mc=50)
-        D_min = D_max / 1000
         
-        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), n_points)
-        
-        for D_target in tqdm(D_targets, desc=f"    D targets", leave=False):
-            capacity, p_opt = simple_cd_optimization(system, D_target, n_mc=50)
-            actual_D = system.calculate_distortion(p_opt, n_mc=50)
-            
-            if 0 < actual_D < 1e10 and capacity > 0:
-                distortions.append(actual_D)
-                capacities.append(capacity)
+        for P_scale in tqdm(P_tx_scales, desc=f"    Power sweep", leave=False):
+            try:
+                # Calculate capacity
+                I_x = system.calculate_mutual_information(p_uniform, P_tx_scale=P_scale, n_mc=50)
+                capacity = np.mean(I_x)
+                
+                # Calculate distortion
+                distortion = system.calculate_distortion(p_uniform, P_tx_scale=P_scale, n_mc=50)
+                
+                if 0 < distortion < 1e10 and capacity > 0:
+                    distortions.append(distortion)
+                    capacities.append(capacity)
+            except:
+                continue
         
         if len(distortions) > 0:
-            ranging_rmse_mm = np.sqrt(distortions) * 1000
+            # Sort and extract Pareto frontier
+            sorted_idx = np.argsort(distortions)
+            D_sorted = np.array(distortions)[sorted_idx]
+            C_sorted = np.array(capacities)[sorted_idx]
+            
+            # Extract Pareto optimal points
+            pareto_D = [D_sorted[0]]
+            pareto_C = [C_sorted[0]]
+            max_C = C_sorted[0]
+            
+            for i in range(1, len(D_sorted)):
+                if C_sorted[i] > max_C:
+                    pareto_D.append(D_sorted[i])
+                    pareto_C.append(C_sorted[i])
+                    max_C = C_sorted[i]
+            
+            ranging_rmse_mm = np.sqrt(pareto_D) * 1000
             
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{profile_name}'] = capacities
+            data_to_save[f'capacity_{profile_name}'] = pareto_C
             
             # Add to diagnostics
             diagnostics.add_key_metric(
                 "CD_Frontier", 
                 f"{profile_name}_MaxCapacity", 
-                max(capacities) if capacities else 0, 
+                max(pareto_C) if pareto_C else 0, 
                 (0, 10), 
                 "bits/symbol"
             )
@@ -349,20 +368,25 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
             
             # Store raw data in results
             diagnostics.results[f'cd_frontier_{profile_name}'] = {
-                'capacities': capacities,
+                'capacities': pareto_C,
                 'ranging_rmse_mm': ranging_rmse_mm.tolist()
             }
             
-            profile = HARDWARE_PROFILES[profile_name]
-            
-            ax.plot(ranging_rmse_mm, capacities,
+            # Plot complete frontier
+            ax.plot(ranging_rmse_mm, pareto_C,
                    color=colors[idx], 
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    marker=markers[idx], 
                    markersize=IEEEStyle.LINE_PROPS['markersize'],
+                   markevery=max(1, len(ranging_rmse_mm)//10),
                    markerfacecolor='white', 
                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                    label=f'{profile_name.replace("_", " ")}')
+    
+    # CRITICAL: Adjust x-axis range for micro-meter scale
+    ax.set_xscale('log')
+    ax.set_xlim(5e-4, 10)  # From 0.5 µm to 10 mm
+    ax.set_ylim(0, ax.get_ylim()[1]*1.1)
     
     # Add feasibility regions
     ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
@@ -370,7 +394,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     
     # Add performance thresholds
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(10, 2.1, 'Good communication', 
+    ax.text(0.01, 2.1, 'Good communication', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
     
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
@@ -382,11 +406,8 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_title('Capacity-Distortion Trade-off (All Hardware Profiles)', 
                 fontsize=IEEEStyle.FONT_SIZES['title'])
-    ax.set_xscale('log')
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    ax.set_xlim(left=0.01)
-    ax.set_ylim(bottom=0, top=ax.get_ylim()[1]*1.1)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -398,6 +419,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     
     print(f"Saved: results/{save_name}.pdf/png and data")
 
+    
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     """Plot capacity vs SNR for all hardware profiles - IEEE style."""
     print(f"\n=== Generating {save_name} ===")

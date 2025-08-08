@@ -207,62 +207,7 @@ class ISACSystem:
         
         return np.array(pareto_D), np.array(pareto_C)
 
-    def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=None, n_mc=100):
-        """
-        Compute C-D frontier using grid search over power and pilot configurations.
-        
-        Args:
-            system: ISACSystem instance
-            D_targets: Array of target distortion values
-            P_tx_scales: Power scaling factors to search (default: logspace)
-            pilot_counts: Pilot count options (default: current system setting)
-            n_mc: Monte Carlo samples for averaging
-            
-        Returns:
-            Tuple of (distortions, capacities) arrays forming the frontier
-        """
-        if P_tx_scales is None:
-            P_tx_scales = np.logspace(-2, +1, 60)  # 0.01x to 10x power scaling
-        if pilot_counts is None:
-            pilot_counts = [system.n_pilots]  # Can expand to [32, 64, 128] for richer frontier
-        
-        # Uniform constellation distribution
-        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        
-        frontier_D = []
-        frontier_C = []
-        
-        for D_target in D_targets:
-            best_C = -1.0
-            best_D = None
-            
-            for M in pilot_counts:
-                # Temporarily update pilot count
-                old_M = system.n_pilots
-                system.n_pilots = M
-                
-                for s in P_tx_scales:
-                    # Calculate capacity
-                    I_vec = system.calculate_mutual_information(p_uniform, P_tx_scale=s, n_mc=n_mc)
-                    C_here = float(np.mean(I_vec))
-                    
-                    # Calculate distortion
-                    D_here = system.calculate_distortion(p_uniform, P_tx_scale=s, n_mc=n_mc)
-                    
-                    # Check if this is a better feasible point
-                    if 0 < D_here < 1e10 and D_here <= D_target * 1.1 and C_here > best_C:  # 10% tolerance
-                        best_C = C_here
-                        best_D = D_here
-                
-                # Restore original pilot count
-                system.n_pilots = old_M
-            
-            if best_C >= 0:
-                frontier_D.append(best_D)
-                frontier_C.append(best_C)
-        
-        return np.array(frontier_D), np.array(frontier_C)
-    
+
     def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
                                n_mc: int = 100) -> np.ndarray:
         """Calculate mutual information with MC averaging."""
@@ -433,14 +378,17 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n
         
         return np.array(pareto_D), np.array(pareto_C)
 
+
+# 替换 plot_cd_frontier_all_profiles 函数
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
-    """Plot C-D frontier for all hardware profiles."""
+    """Plot C-D frontier for all hardware profiles with complete curves."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
     profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
     
+    # Data storage
     data_to_save = {
         'hardware_profiles': profiles_to_plot
     }
@@ -450,22 +398,33 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
             continue
             
         print(f"  Processing {profile_name}...")
-        system = ISACSystem(profile_name)
         
-        # Use full grid search for complete frontier
+        # Create system with specified parameters
+        system = ISACSystem(
+            hardware_profile=profile_name,
+            f_c=300e9,
+            distance=scenario.R_default,
+            n_pilots=simulation.n_pilots,
+            antenna_diameter=scenario.default_antenna_diameter,
+            tx_power_dBm=scenario.default_tx_power_dBm
+        )
+        
+        # CRITICAL FIX: Use compute_cd_frontier_grid_full for complete frontier
         distortions, capacities = compute_cd_frontier_grid_full(
             system,
-            P_tx_scales=np.logspace(-2, +2, 100),  # Fine power grid
-            pilot_counts=[system.n_pilots],
+            P_tx_scales=np.logspace(-2, +2, 100),  # Wide power range
+            pilot_counts=[system.n_pilots],  # Can expand to [32, 64, 128] for richer frontier
             n_mc=50
         )
         
         if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000.0
             
+            # Store complete frontier data
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
             data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
             
+            # Plot complete frontier curve
             ax.plot(ranging_rmse_mm, capacities,
                    color=colors[idx], 
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
@@ -478,7 +437,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     
     # CRITICAL FIX: Adjust x-axis to show micro-meter level data
     ax.set_xscale('log')
-    ax.set_xlim(5e-4, 100)  # From 0.5 µm to 100 mm
+    ax.set_xlim(5e-4, 10)  # From 0.5 µm to 10 mm
     ax.set_ylim(0, 10)
     
     # Add feasibility regions with proper shading
@@ -487,7 +446,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     
     # Add performance thresholds
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(0.1, 2.1, 'Good communication', 
+    ax.text(0.01, 2.1, 'Good communication', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
     
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
@@ -514,76 +473,101 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     
     print(f"Saved: results/{save_name}.pdf/png and data")
 
+
+# 替换 plot_cd_frontier_pointing_sensitivity 函数
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):
-    """Plot C-D frontier sensitivity to pointing error."""
+    """Plot C-D frontier sensitivity to pointing error with enhanced visibility."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
     profile_name = "High_Performance"
-    pointing_errors_urad = [0.5, 1.0, 2.0]  # µrad
+    # ENHANCED: Wider range of pointing errors for visible differences
+    pointing_errors_urad = [0.5, 2.0, 5.0, 10.0, 20.0]  # Extended to 20 µrad
     
+    # Data storage
     data_to_save = {
         'hardware_profile': profile_name,
         'pointing_errors_urad': pointing_errors_urad
     }
     
-    for idx, pe_urad in enumerate(pointing_errors_urad):
-        print(f"  Processing σ_θ = {pe_urad} µrad...")
-        
-        # CRITICAL: Set pointing error for this iteration
-        pe_rad = pe_urad * 1e-6
-        original_pe = scenario.pointing_error_rms_rad
-        scenario.pointing_error_rms_rad = pe_rad
-        
-        # Create system with updated pointing error
-        system = ISACSystem(profile_name)
-        
-        # Use full grid search for complete frontier
-        distortions, capacities = compute_cd_frontier_grid_full(
-            system,
-            P_tx_scales=np.logspace(-2, +2, 60),
-            pilot_counts=[system.n_pilots],
-            n_mc=50
-        )
-        
+    # Save original pointing error
+    original_pe = scenario.pointing_error_rms_rad
+    
+    try:
+        for idx, pe_urad in enumerate(pointing_errors_urad):
+            print(f"  Processing σ_θ = {pe_urad} µrad...")
+            
+            # Set pointing error for this iteration
+            pe_rad = pe_urad * 1e-6
+            scenario.pointing_error_rms_rad = pe_rad
+            
+            # Create system with REDUCED antenna diameter for more sensitivity
+            system = ISACSystem(
+                hardware_profile=profile_name,
+                f_c=300e9,
+                distance=scenario.R_default,
+                n_pilots=simulation.n_pilots,
+                antenna_diameter=1.0,  # Reduced from 1.5m to increase sensitivity
+                tx_power_dBm=30  # Slightly reduced power to avoid deep saturation
+            )
+            
+            # Use full grid search for complete frontier
+            distortions, capacities = compute_cd_frontier_grid_full(
+                system,
+                P_tx_scales=np.logspace(-2, +1, 60),
+                pilot_counts=[system.n_pilots],
+                n_mc=50
+            )
+            
+            if distortions.size > 0:
+                ranging_rmse_mm = np.sqrt(distortions) * 1000
+                
+                data_to_save[f'ranging_rmse_mm_{pe_urad}urad'] = ranging_rmse_mm.tolist()
+                data_to_save[f'capacity_{pe_urad}urad'] = capacities.tolist()
+                
+                # Use different line styles for clarity
+                linestyle = linestyles[min(idx, len(linestyles)-1)]
+                
+                ax.plot(ranging_rmse_mm, capacities,
+                       color=colors[min(idx, len(colors)-1)], 
+                       linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                       linestyle=linestyle,
+                       marker=markers[min(idx, len(markers)-1)], 
+                       markersize=IEEEStyle.LINE_PROPS['markersize'],
+                       markevery=max(1, len(ranging_rmse_mm)//8),
+                       markerfacecolor='white', 
+                       markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                       label=f'σ_θ = {pe_urad} µrad')
+    
+    finally:
         # Restore original pointing error
         scenario.pointing_error_rms_rad = original_pe
-        
-        if distortions.size > 0:
-            ranging_rmse_mm = np.sqrt(distortions) * 1000
-            
-            data_to_save[f'ranging_rmse_mm_{pe_urad}urad'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{pe_urad}urad'] = capacities.tolist()
-            
-            ax.plot(ranging_rmse_mm, capacities,
-                   color=colors[idx], 
-                   linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                   linestyle=linestyles[idx],
-                   marker=markers[idx], 
-                   markersize=IEEEStyle.LINE_PROPS['markersize'],
-                   markevery=max(1, len(ranging_rmse_mm)//10),
-                   markerfacecolor='white', 
-                   markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                   label=f'σ_θ = {pe_urad} µrad')
     
-    # CRITICAL FIX: Adjust x-axis range
+    # CRITICAL FIX: Adjust x-axis range for micro-meter scale
     ax.set_xscale('log')
-    ax.set_xlim(5e-4, 100)  # From 0.5 µm to 100 mm
+    ax.set_xlim(5e-4, 10)  # From 0.5 µm to 10 mm
     ax.set_ylim(0, 10)
     
     # Performance thresholds
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
     
+    # Add text annotations
+    ax.text(0.01, 2.1, 'Good communication', 
+           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
+    ax.text(0.8, ax.get_ylim()[1]*0.7, 'Sub-mm', ha='right',
+           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
+    
     # Labels
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Communication Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Impact of Pointing Error on C-D Trade-off\n(High Performance Hardware)',
+    ax.set_title('Impact of Pointing Error on C-D Trade-off\n(High Performance Hardware, 1m Antenna)',
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
+             ncol=1 if len(pointing_errors_urad) <= 4 else 2)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -594,7 +578,7 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
                        "C-D frontier sensitivity to pointing error")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-
+    
 def plot_snr_to_hardware_limit(save_name='fig_snr_to_hardware_limit'):
     """Plot SNR required to reach hardware-limited capacity ceiling."""
     print(f"\n=== Generating {save_name} ===")

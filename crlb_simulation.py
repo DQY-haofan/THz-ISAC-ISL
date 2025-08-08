@@ -166,6 +166,24 @@ class EnhancedCRLBAnalyzer:
                 continue
                 
             profile = HARDWARE_PROFILES[hardware_profile]
+                # Calculate theoretical hardware-limited floor
+            # At high SNR: SNR_eff → 1/(Γ·exp(σ_φ²))
+            SNR_eff_limit = 1.0 / (profile.Gamma_eff * np.exp(profile.phase_noise_variance))
+            
+            # BCRLB floor
+            phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * frequency_Hz**2)
+            bcrlb_floor = phase_term * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff_limit)
+            rmse_floor_mm = np.sqrt(bcrlb_floor) * 1000
+            
+            # Draw horizontal platform line
+            ax.axhline(y=rmse_floor_mm, color=colors[i], linestyle='--', 
+                    alpha=0.3, linewidth=1.0)
+            
+            # Add text annotation for the floor
+            ax.text(55, rmse_floor_mm * 1.2, f'{hardware_profile.split("_")[0]} floor',
+                fontsize=IEEEStyle.FONT_SIZES['annotation']-1,
+                color=colors[i], alpha=0.7)
+            
             B = self.calculate_bussgang_gain()
             
             ranging_rmse_mm = []
