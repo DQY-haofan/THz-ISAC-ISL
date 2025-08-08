@@ -287,23 +287,25 @@ class EnhancedISACSystem:
 
 # 添加辅助函数来生成完整前沿
 def generate_cd_frontier(system, P_tx_scales=None, n_mc=50):
-    """Generate complete C-D frontier for a system."""
-    if P_tx_scales is None:
-        P_tx_scales = np.logspace(-2, +2, 100)
+    """Generate C-D frontier by power scaling only (simpler version)."""
     
+    # Power scaling range
+    P_tx_scales = np.logspace(-0.5, +0.5, n_points)  # ±3dB range
+    
+    # Keep uniform distribution
     p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
     
     all_D = []
     all_C = []
     
-    for P_scale in P_tx_scales:
+    for P_scale in tqdm(P_tx_scales, desc="    Power sweep", leave=False):
         try:
             # Calculate capacity
-            I_x = system.calculate_mutual_information(p_uniform, P_tx_scale=P_scale, n_mc=n_mc)
+            I_x = system.calculate_mutual_information(p_uniform, P_tx_scale=P_scale, n_mc=50)
             capacity = np.mean(I_x)
             
             # Calculate distortion
-            distortion = system.calculate_distortion(p_uniform, P_tx_scale=P_scale, n_mc=n_mc)
+            distortion = system.calculate_distortion(p_uniform, P_tx_scale=P_scale, n_mc=50)
             
             if 0 < distortion < 1e10 and capacity > 0:
                 all_D.append(distortion)
@@ -438,7 +440,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     for profile in profiles_to_plot:
         if f'num_points_{profile}' in data_to_save:
             print(f"  {profile}: {data_to_save[f'num_points_{profile}']} frontier points")
-            
+
 
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     """Plot capacity vs SNR for all hardware profiles - IEEE style."""
