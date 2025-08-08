@@ -485,7 +485,9 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
         return np.array([]), np.array([])
 
 
+# 文件: cd_frontier_simulation.py
 # 替换 plot_cd_frontier_all_profiles 函数
+
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     """Plot C-D frontier with effective spectral efficiency."""
     print(f"\n=== Generating {save_name} ===")
@@ -500,7 +502,8 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
         'frame_size': 1024
     }
     
-    for idx, profile_name in enumerate(profiles_to_plot):
+    # CRITICAL FIX: Use profile_idx instead of idx to avoid conflict
+    for profile_idx, profile_name in enumerate(profiles_to_plot):
         if profile_name not in HARDWARE_PROFILES:
             continue
             
@@ -533,9 +536,9 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
             data_to_save[f'capacity_eff_{profile_name}'] = capacities.tolist()
             data_to_save[f'num_points_{profile_name}'] = len(capacities)
             
-            # Plot complete frontier curve
+            # Plot complete frontier curve - USE profile_idx HERE
             ax.plot(ranging_rmse_mm, capacities,
-                   color=colors[idx], 
+                   color=colors[profile_idx],  # FIX: Use profile_idx
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    linestyle='-',
                    alpha=0.9,
@@ -554,16 +557,19 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                     if idx not in marker_indices:
                         marker_indices.append(idx)
                 
+                # FIX: Use profile_idx for colors and markers
                 ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
-                       color=colors[idx],
+                       color=colors[profile_idx],  # FIX: Use profile_idx
                        linestyle='None',
-                       marker=markers[idx], 
+                       marker=markers[profile_idx],  # FIX: Use profile_idx
                        markersize=IEEEStyle.LINE_PROPS['markersize']-1,
                        markerfacecolor='white', 
                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                        zorder=6)
             
             print(f"    {profile_name}: {len(capacities)} frontier points")
+            print(f"      RMSE range: [{np.min(ranging_rmse_mm):.3e}, {np.max(ranging_rmse_mm):.3e}] mm")
+            print(f"      Capacity range: [{np.min(capacities):.2f}, {np.max(capacities):.2f}] bits/symbol")
     
     # Set axis properties
     ax.set_xscale('log')
@@ -618,6 +624,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     print(f"Saved: results/{save_name}.pdf/png and data")
 
     
+
 # 替换 plot_cd_frontier_pointing_sensitivity 函数
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):
     """Plot C-D frontier sensitivity to pointing error with enhanced visibility."""
