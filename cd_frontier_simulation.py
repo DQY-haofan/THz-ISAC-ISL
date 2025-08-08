@@ -445,18 +445,19 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n
     else:
         return np.array([]), np.array([])
       
-# 替换 plot_cd_frontier_all_profiles 函数
+# 完全替换 plot_cd_frontier_all_profiles 函数
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
-    """Plot C-D frontier with adjusted parameters for visible trade-offs."""
+    """Plot C-D frontier for all hardware profiles with complete curves."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
     profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
     
+    # Data storage
     data_to_save = {
         'hardware_profiles': profiles_to_plot,
-        'description': 'C-D frontiers with adjusted parameters for visibility'
+        'description': 'C-D frontiers from power and pilot scaling'
     }
     
     for idx, profile_name in enumerate(profiles_to_plot):
@@ -465,102 +466,115 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
             
         print(f"  Processing {profile_name}...")
         
-        # CRITICAL ADJUSTMENTS for visible trade-offs:
-        # 1. Smaller antenna (reduces gain, makes power matter more)
-        # 2. Lower base power (starts from power-limited regime)
-        # 3. Longer distance (increases path loss)
-        
+        # Create system
         system = ISACSystem(
             hardware_profile=profile_name,
             f_c=300e9,
-            distance=3000e3,  # Increased to 3000 km
-            n_pilots=64,
-            antenna_diameter=0.5,  # Reduced to 0.5m
-            tx_power_dBm=25  # Reduced base power
+            distance=scenario.R_default,
+            n_pilots=64,  # Default, will be varied
+            antenna_diameter=scenario.default_antenna_diameter,
+            tx_power_dBm=scenario.default_tx_power_dBm
         )
         
-        # Generate frontier with VERY wide power range
+        # Generate complete C-D frontier
+        # CRITICAL: Use appropriate power range and pilot counts
         distortions, capacities = compute_cd_frontier_grid_full(
             system,
-            P_tx_scales=np.logspace(-1.5, +1.5, 150),  # -15dB to +15dB
-            pilot_counts=[8, 16, 32, 64, 128, 256],
-            n_mc=30  # Reduced for speed
+            P_tx_scales=np.logspace(-0.5, +0.5, 40),  # ±3dB around nominal
+            pilot_counts=[16, 32, 64, 128],  # Practical pilot counts
+            n_mc=50
         )
         
         if distortions.size > 0:
+            # Convert to RMSE in mm
             ranging_rmse_mm = np.sqrt(distortions) * 1000.0
             
-            # Filter out outliers for cleaner plot
-            valid_idx = (ranging_rmse_mm < 1000) & (capacities > 0.1)
-            ranging_rmse_mm = ranging_rmse_mm[valid_idx]
-            capacities = capacities[valid_idx]
+            # Store data
+            data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
+            data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
+            data_to_save[f'num_points_{profile_name}'] = len(capacities)
             
-            if len(ranging_rmse_mm) > 0:
-                data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-                data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
-                data_to_save[f'num_points_{profile_name}'] = len(capacities)
+            # Plot frontier curve
+            ax.plot(ranging_rmse_mm, capacities,
+                   color=colors[idx], 
+                   linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                   linestyle='-',
+                   label=f'{profile_name.replace("_", " ")}',
+                   zorder=5)
+            
+            # Add markers for visibility
+            if len(ranging_rmse_mm) > 1:
+                # Select evenly spaced points for markers
+                n_markers = min(8, len(ranging_rmse_mm))
+                marker_indices = np.linspace(0, len(ranging_rmse_mm)-1, n_markers, dtype=int)
                 
-                # Plot complete curve
-                ax.plot(ranging_rmse_mm, capacities,
-                       color=colors[idx], 
-                       linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                       linestyle='-',
-                       alpha=0.8,
-                       label=f'{profile_name.replace("_", " ")}')
-                
-                # Add sparse markers
-                if len(ranging_rmse_mm) > 5:
-                    n_markers = min(10, len(ranging_rmse_mm))
-                    marker_indices = np.linspace(0, len(ranging_rmse_mm)-1, n_markers, dtype=int)
-                    
-                    ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
-                           color=colors[idx],
-                           linestyle='None',
-                           marker=markers[idx], 
-                           markersize=IEEEStyle.LINE_PROPS['markersize']-1,
-                           markerfacecolor='white', 
-                           markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
-                
-                print(f"    {profile_name}: {len(capacities)} frontier points")
+                ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
+                       color=colors[idx],
+                       linestyle='None',
+                       marker=markers[idx], 
+                       markersize=IEEEStyle.LINE_PROPS['markersize'],
+                       markerfacecolor='white', 
+                       markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                       zorder=6)
+            
+            # Calculate and mark nominal operating point
+            p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+            system.n_pilots = 64  # Reset to default
+            
+            I_nominal = system.calculate_mutual_information(p_uniform, P_tx_scale=1.0, n_mc=50)
+            C_nominal = np.mean(I_nominal)
+            D_nominal = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
+            rmse_nominal = np.sqrt(D_nominal) * 1000
+            
+            # Mark nominal point with filled marker
+            ax.plot(rmse_nominal, C_nominal, 
+                   color=colors[idx],
+                   marker=markers[idx],
+                   markersize=IEEEStyle.LINE_PROPS['markersize']*1.5,
+                   markerfacecolor=colors[idx],
+                   markeredgewidth=2,
+                   markeredgecolor='white',
+                   zorder=10)
+            
+            print(f"    {profile_name}: {len(capacities)} frontier points")
+            print(f"      Nominal: C={C_nominal:.2f} bits/sym, RMSE={rmse_nominal:.3f} mm")
     
-    # Set axis properties
+    # Set axis properties BEFORE drawing regions
     ax.set_xscale('log')
-    ax.set_xlim(1e-2, 1000)  # Wider range: 10 µm to 1000 mm
+    ax.set_xlim(1e-3, 100)  # 1 µm to 100 mm
     ax.set_ylim(0, 10)
     
     # Add feasibility regions
-    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.05, color='green')
-    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.05, color='blue')
+    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
+    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
     
     # Add threshold lines
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
     
-    # Annotations
-    ax.text(0.5, 2.1, 'Communication threshold', 
+    # Add annotations
+    ax.text(2e-2, 2.1, 'Good communication (2 bits/symbol)', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
-    ax.text(0.8, 7, 'Sub-mm', ha='right',
+    ax.text(0.8, 8, 'Sub-mm\nsensing', ha='right', va='top',
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
     
-    # Add configuration note
-    ax.text(0.98, 0.02, 
-           'Config: 300 GHz, 3000 km, 0.5m antenna, 25 dBm base power\n' +
-           'Sweep: Power ±15dB, Pilots 8-256',
-           transform=ax.transAxes,
-           fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
-           ha='right', va='bottom',
+    # Add legend note
+    ax.text(0.02, 9, 'Lines: Pareto frontier (power & pilot trade-off)\n' + 
+                     'Filled markers: Nominal operating points',
+           fontsize=IEEEStyle.FONT_SIZES['annotation']-1,
            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
                     edgecolor='gray', alpha=0.9))
     
-    # Labels
+    # Labels and title
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Communication Capacity (bits/symbol)', 
                  fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('C-D Trade-off Frontiers with Power/Pilot Optimization',
+    ax.set_title('C-D Trade-off: Power and Pilot Allocation',
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     
+    # Grid and legend
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='best', fontsize=IEEEStyle.FONT_SIZES['legend'],
+    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
              frameon=True, edgecolor='black', framealpha=0.9)
     
     plt.tight_layout()
@@ -568,12 +582,12 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
+    # Save data
     data_saver.save_data(save_name, data_to_save,
-                       "C-D frontier with adjusted parameters")
+                       "C-D frontier for all hardware profiles (power & pilot trade-off)")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
 
-    
 # 替换 plot_cd_frontier_pointing_sensitivity 函数
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):
     """Plot C-D frontier sensitivity to pointing error with enhanced visibility."""
