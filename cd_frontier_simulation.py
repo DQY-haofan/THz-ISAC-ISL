@@ -86,7 +86,7 @@ class ISACSystem:
         self.noise_figure_dB = 8
         self.bandwidth_Hz = self.profile.signal_bandwidth_Hz
         self.noise_temp_K = 290 * 10**(self.noise_figure_dB/10)
-        self.N_0 = PhysicalConstants.k * self.noise_temp_K * self.bandwidth_Hz
+        self.noise_power_watts = PhysicalConstants.k * self.noise_temp_K * self.bandwidth_Hz  # Renamed
         
         # Channel gain (linear)
         self.channel_gain = np.sqrt(10**((self.G_tx_dB + self.G_rx_dB - self.path_loss_dB)/10))
@@ -100,8 +100,8 @@ class ISACSystem:
             print(f"  Antenna Gains: {self.G_tx_dB:.1f} dBi each")
             print(f"  Path Loss: {self.path_loss_dB:.1f} dB")
             print(f"  Rx Power: {self.P_rx_dBm:.1f} dBm")
-            print(f"  Noise Power: {10*np.log10(self.N_0*1000):.1f} dBm")
-            print(f"  Link Margin: {self.P_rx_dBm - 10*np.log10(self.N_0*1000):.1f} dB")
+            print(f"  Noise Power: {10*np.log10(self.noise_power_watts*1000):.1f} dBm")
+            print(f"  Link Margin: {self.P_rx_dBm - 10*np.log10(self.noise_power_watts*1000):.1f} dB")
             self.__class__._link_budget_printed = True
     
     def _calculate_bussgang_gain(self, input_backoff_dB: float = 7.0) -> complex:
@@ -119,8 +119,9 @@ class ISACSystem:
             constellation /= np.sqrt(np.mean(np.abs(constellation)**2))
         return constellation
     
+    # 在 calculate_sinr_mc 方法中
     def calculate_sinr_mc(self, symbol: complex, avg_power: float, P_tx_scale: float,
-                     n_mc: int = 100) -> float:
+                    n_mc: int = 100) -> float:
         """Calculate SINR with Monte Carlo pointing error averaging."""
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
         symbol_power = np.abs(symbol)**2
@@ -134,7 +135,7 @@ class ISACSystem:
         P_rx_signal_base = P_tx * symbol_power * np.abs(self.channel_gain)**2 * np.abs(self.bussgang_gain)**2
         P_rx_signal_avg = P_rx_signal_base * np.mean(pointing_losses)
         
-        N_thermal = self.N_0
+        N_thermal = self.noise_power_watts  # Changed from self.N_0
         N_hw = P_rx_signal_avg * self.profile.Gamma_eff
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         
@@ -258,7 +259,7 @@ class ISACSystem:
         
         P_rx = P_tx * (self.channel_gain**2) * (self.bussgang_gain**2) * avg_pointing_loss
         
-        N_thermal = self.N_0
+        N_thermal = self.noise_power_watts  # Changed from self.N_0
         N_hw = P_rx * self.profile.Gamma_eff
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         N_total = N_thermal + N_hw * phase_penalty
@@ -310,6 +311,66 @@ class ISACSystem:
 # =========================================================================
 # ENHANCED PLOT FUNCTIONS
 # =========================================================================
+
+def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=None, n_mc=100):
+    """
+    Compute C-D frontier using grid search over power and pilot configurations.
+    
+    Args:
+        system: ISACSystem instance
+        D_targets: Array of target distortion values
+        P_tx_scales: Power scaling factors to search (default: logspace)
+        pilot_counts: Pilot count options (default: current system setting)
+        n_mc: Monte Carlo samples for averaging
+        
+    Returns:
+        Tuple of (distortions, capacities) arrays forming the frontier
+    """
+    if P_tx_scales is None:
+        P_tx_scales = np.logspace(-2, +1, 60)  # 0.01x to 10x power scaling
+    if pilot_counts is None:
+        pilot_counts = [system.n_pilots]  # Can expand to [32, 64, 128] for richer frontier
+    
+    # Uniform constellation distribution
+    p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+    
+    frontier_D = []
+    frontier_C = []
+    
+    for D_target in tqdm(D_targets, desc="    Computing frontier", leave=False):
+        best_C = -1.0
+        best_D = None
+        
+        for M in pilot_counts:
+            # Temporarily update pilot count
+            old_M = system.n_pilots
+            system.n_pilots = M
+            
+            for s in P_tx_scales:
+                try:
+                    # Calculate capacity
+                    I_vec = system.calculate_mutual_information(p_uniform, P_tx_scale=s, n_mc=n_mc)
+                    C_here = float(np.mean(I_vec))
+                    
+                    # Calculate distortion
+                    D_here = system.calculate_distortion(p_uniform, P_tx_scale=s, n_mc=n_mc)
+                    
+                    # Check if this is a better feasible point
+                    if 0 < D_here < 1e10 and D_here <= D_target * 1.1 and C_here > best_C:  # 10% tolerance
+                        best_C = C_here
+                        best_D = D_here
+                except:
+                    # Skip invalid points
+                    continue
+            
+            # Restore original pilot count
+            system.n_pilots = old_M
+        
+        if best_C >= 0:
+            frontier_D.append(best_D)
+            frontier_C.append(best_C)
+    
+    return np.array(frontier_D), np.array(frontier_C)
 
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     """Plot C-D frontier for all hardware profiles."""

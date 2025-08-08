@@ -125,7 +125,7 @@ class EnhancedISACSystem:
         self.noise_power_watts = PhysicalConstants.k * noise_temp_K * self.bandwidth_Hz  # Renamed from N_0
         self.noise_power_dBm = 10 * np.log10(self.noise_power_watts * 1000)
         
-        # FIXED: Channel gain calculation
+        # Channel gain calculation
         G_tx_linear = 10**(self.G_tx_dB/10)
         G_rx_linear = 10**(self.G_rx_dB/10)
         path_loss_linear = 10**(-self.path_loss_dB/10)
@@ -151,8 +151,9 @@ class EnhancedISACSystem:
             constellation /= np.sqrt(np.mean(np.abs(constellation)**2))
         return constellation
     
+    # 替换 calculate_sinr_mc 方法
     def calculate_sinr_mc(self, symbol: complex, avg_power: float, P_tx_scale: float,
-                     n_mc: int = 100) -> float:
+                    n_mc: int = 100) -> float:
         """Calculate SINR for given symbol with Monte Carlo pointing error averaging."""
         P_tx = self.P_tx_watts * P_tx_scale * avg_power
         symbol_power = np.abs(symbol)**2
@@ -166,7 +167,7 @@ class EnhancedISACSystem:
         P_rx_signal_base = P_tx * symbol_power * np.abs(self.channel_gain)**2 * np.abs(self.bussgang_gain)**2
         P_rx_signal_avg = P_rx_signal_base * np.mean(pointing_losses)
         
-        N_thermal = self.N_0
+        N_thermal = self.noise_power_watts  # Changed from self.N_0
         N_hw = P_rx_signal_avg * self.profile.Gamma_eff
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         
@@ -189,6 +190,7 @@ class EnhancedISACSystem:
             
         return I_x
     
+    # 替换 calculate_capacity_vs_snr 方法
     def calculate_capacity_vs_snr(self, snr_dB_array: np.ndarray, n_mc: int = 100) -> Dict[str, np.ndarray]:
         """Calculate capacity vs SNR showing hardware ceiling with MC averaging."""
         capacities = []
@@ -221,6 +223,7 @@ class EnhancedISACSystem:
             'ceiling': ceiling
         }
     
+    # 替换 calculate_bfim_observable_mc 方法
     def calculate_bfim_observable_mc(self, avg_power: float, P_tx_scale: float,
                                     n_mc: int = 100) -> np.ndarray:
         """Calculate B-FIM for observable parameters with MC averaging."""
@@ -234,7 +237,7 @@ class EnhancedISACSystem:
         
         P_rx = P_tx * (self.channel_gain**2) * (self.bussgang_gain**2) * avg_pointing_loss
         
-        N_thermal = self.N_0
+        N_thermal = self.noise_power_watts  # Changed from self.N_0
         N_hw = P_rx * self.profile.Gamma_eff
         phase_penalty = np.exp(self.profile.phase_noise_variance)
         N_total = N_thermal + N_hw * phase_penalty
