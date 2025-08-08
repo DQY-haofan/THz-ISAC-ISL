@@ -64,8 +64,8 @@ class EnhancedCRLBAnalyzer:
         signal_power: float = 1.0, tx_power_dBm: float = None,
         bandwidth_Hz: float = 10e9, frequency_Hz: float = 300e9,
         antenna_diameter: float = None, n_mc: int = 100
-    ) -> Tuple[float, float, float]:  # 返回三个值
-        """Calculate effective noise variance with consistent pointing error handling.
+    ) -> Tuple[float, float, float]:
+        """Calculate effective noise variance targeting specific SNR.
         
         Returns:
             Tuple of (sigma_eff_sq, N_thermal, SNR_eff)
@@ -88,23 +88,23 @@ class EnhancedCRLBAnalyzer:
         # Calculate received power with expected pointing loss
         P_rx = P_tx_watts * signal_power * (channel_gain ** 2) * (B ** 2) * pointing_loss_expected
         
-        # Thermal noise
-        noise_figure_linear = 10**(8/10)  # 8 dB noise figure
-        N_thermal = PhysicalConstants.k * 290 * noise_figure_linear * bandwidth_Hz
+        # CRITICAL FIX: Set thermal noise to achieve target SNR
+        # This makes the CRLB actually vary with SNR
+        N_awgn = P_rx / SNR_linear  # Target AWGN noise for requested SNR
         
         # Hardware-dependent noise
         N_hw = P_rx * profile.Gamma_eff * np.exp(profile.phase_noise_variance)
         
         # DSE residual (parameterized)
-        N_DSE = simulation.kappa_DSE * N_thermal
+        N_DSE = simulation.kappa_DSE * N_awgn
         
         # Total effective noise
-        N_total = N_thermal + N_hw + N_DSE
+        N_total = N_awgn + N_hw + N_DSE
         
         # Effective SNR (for FIM calculation)
         SNR_eff = P_rx / N_total
         
-        return N_total, N_thermal, SNR_eff
+        return N_total, N_awgn, SNR_eff
 
     
     def calculate_observable_bcrlb_mc(

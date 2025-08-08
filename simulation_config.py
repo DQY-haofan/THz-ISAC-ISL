@@ -249,24 +249,49 @@ class ScenarioParameters:
         return 2.77 / (theta_3dB ** 2)
     
     def calculate_pointing_loss_factor(self, frequency_hz: float, diameter: float = None, 
-                                     pointing_error_rms: float = None) -> float:
-        """Calculate expected pointing loss factor due to random pointing errors."""
+                                 pointing_error_rms: float = None) -> float:
+        """Calculate expected pointing loss factor due to random pointing errors.
+        
+        Args:
+            frequency_hz: Carrier frequency [Hz]
+            diameter: Antenna diameter [m]
+            pointing_error_rms: RMS pointing error [rad] - if None, use default
+            
+        Returns:
+            Expected pointing loss factor (power)
+        """
         if pointing_error_rms is None:
             pointing_error_rms = self.pointing_error_rms_rad
         
+        if diameter is None:
+            diameter = self.default_antenna_diameter
+            
         gamma = self.beam_rolloff_factor(frequency_hz, diameter)
         # Expected value of exp(-gamma * ||theta_e||^2) where ||theta_e||^2 ~ chi^2(2)
         return 1 / (1 + 2 * gamma * pointing_error_rms**2)
     
     def sample_pointing_loss(self, frequency_hz: float, diameter: float = None,
-                           pointing_error_rms: float = None, n_samples: int = 1) -> np.ndarray:
-        """Sample random pointing loss factors."""
+                        pointing_error_rms: float = None, n_samples: int = 1) -> np.ndarray:
+        """Sample random pointing loss factors.
+        
+        Args:
+            frequency_hz: Carrier frequency [Hz]
+            diameter: Antenna diameter [m]
+            pointing_error_rms: RMS pointing error [rad] - if None, use default
+            n_samples: Number of samples to generate
+            
+        Returns:
+            Array of pointing loss factors (power)
+        """
         if pointing_error_rms is None:
             pointing_error_rms = self.pointing_error_rms_rad
+        
+        if diameter is None:
+            diameter = self.default_antenna_diameter
             
         gamma = self.beam_rolloff_factor(frequency_hz, diameter)
         
-        # Sample 2D Gaussian pointing errors
+        # Sample 2D Gaussian pointing errors with specified RMS
         theta_x = np.random.normal(0, pointing_error_rms, n_samples)
         theta_y = np.random.normal(0, pointing_error_rms, n_samples)
         theta_squared = theta_x**2 + theta_y**2

@@ -40,13 +40,15 @@ class ISACSystem:
     
     def __init__(self, hardware_profile: str, f_c: float = 300e9, 
                  distance: float = 2000e3, n_pilots: int = 64,
-                 antenna_diameter: float = None):
+                 antenna_diameter: float = None,
+                 tx_power_dBm: float = None):  # ADD THIS PARAMETER
         """Initialize with enhanced parameters."""
         self.profile = HARDWARE_PROFILES[hardware_profile]
         self.f_c = f_c
         self.distance = distance
         self.n_pilots = n_pilots
         self.antenna_diameter = antenna_diameter or scenario.default_antenna_diameter
+        self.tx_power_dBm = tx_power_dBm or scenario.default_tx_power_dBm  # ADD THIS
         
         # Calculate system parameters
         self.lambda_c = PhysicalConstants.c / f_c
@@ -65,8 +67,8 @@ class ISACSystem:
     
     def _calculate_enhanced_link_budget(self):
         """Enhanced link budget with larger antennas and higher power."""
-        # Use default high power for THz
-        self.P_tx_dBm = scenario.default_tx_power_dBm
+        # Use passed-in or default power
+        self.P_tx_dBm = self.tx_power_dBm  # CHANGED: use instance variable
         self.P_tx_watts = 10**(self.P_tx_dBm/10) / 1000
         
         # Enhanced antenna gains with larger diameter
@@ -86,7 +88,7 @@ class ISACSystem:
         self.noise_figure_dB = 8
         self.bandwidth_Hz = self.profile.signal_bandwidth_Hz
         self.noise_temp_K = 290 * 10**(self.noise_figure_dB/10)
-        self.noise_power_watts = PhysicalConstants.k * self.noise_temp_K * self.bandwidth_Hz  # Renamed
+        self.noise_power_watts = PhysicalConstants.k * self.noise_temp_K * self.bandwidth_Hz
         
         # Channel gain (linear)
         self.channel_gain = np.sqrt(10**((self.G_tx_dB + self.G_rx_dB - self.path_loss_dB)/10))
@@ -145,6 +147,66 @@ class ISACSystem:
         # Ensure real and positive
         return np.real(np.abs(sinr))
     
+
+    def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n_mc=100):
+        """
+        Compute full C-D frontier with multiple points using grid search.
+        
+        Returns arrays of (distortions, capacities) forming the complete frontier.
+        """
+        if P_tx_scales is None:
+            P_tx_scales = np.logspace(-2, +2, 80)  # Wider range for complete frontier
+        if pilot_counts is None:
+            pilot_counts = [system.n_pilots]
+        
+        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+        
+        all_D = []
+        all_C = []
+        
+        # Compute all (D, C) pairs
+        for M in pilot_counts:
+            old_M = system.n_pilots
+            system.n_pilots = M
+            
+            for s in P_tx_scales:
+                try:
+                    # Calculate capacity
+                    I_vec = system.calculate_mutual_information(p_uniform, P_tx_scale=s, n_mc=n_mc)
+                    C_here = float(np.mean(I_vec))
+                    
+                    # Calculate distortion
+                    D_here = system.calculate_distortion(p_uniform, P_tx_scale=s, n_mc=n_mc)
+                    
+                    if 0 < D_here < 1e10 and C_here > 0:
+                        all_D.append(D_here)
+                        all_C.append(C_here)
+                except:
+                    continue
+            
+            system.n_pilots = old_M
+        
+        if len(all_D) == 0:
+            return np.array([]), np.array([])
+        
+        # Sort by distortion and extract Pareto frontier
+        sorted_idx = np.argsort(all_D)
+        D_sorted = np.array(all_D)[sorted_idx]
+        C_sorted = np.array(all_C)[sorted_idx]
+        
+        # Extract Pareto optimal points (non-dominated)
+        pareto_D = [D_sorted[0]]
+        pareto_C = [C_sorted[0]]
+        max_C = C_sorted[0]
+        
+        for i in range(1, len(D_sorted)):
+            if C_sorted[i] > max_C:  # Higher capacity at higher distortion
+                pareto_D.append(D_sorted[i])
+                pareto_C.append(C_sorted[i])
+                max_C = C_sorted[i]
+        
+        return np.array(pareto_D), np.array(pareto_C)
+
     def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=None, n_mc=100):
         """
         Compute C-D frontier using grid search over power and pilot configurations.
@@ -372,6 +434,7 @@ def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=N
     
     return np.array(frontier_D), np.array(frontier_C)
 
+
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     """Plot C-D frontier for all hardware profiles."""
     print(f"\n=== Generating {save_name} ===")
@@ -380,7 +443,6 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     
     profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
     
-    # Data storage
     data_to_save = {
         'hardware_profiles': profiles_to_plot
     }
@@ -392,22 +454,14 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
         print(f"  Processing {profile_name}...")
         system = ISACSystem(profile_name)
         
-        # Generate D targets
-        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        D_max = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
-        D_min = D_max / 1000.0
-        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), 12)
-        
-        # Use grid search to compute frontier
-        distortions, capacities = compute_cd_frontier_grid(
+        # Use full grid search for complete frontier
+        distortions, capacities = compute_cd_frontier_grid_full(
             system,
-            D_targets,
-            P_tx_scales=np.logspace(-2, +1, 60),  # More power points for smoother curve
-            pilot_counts=[system.n_pilots],  # Or [32, 64, 128] for richer analysis
+            P_tx_scales=np.logspace(-2, +2, 100),  # Fine power grid
+            pilot_counts=[system.n_pilots],
             n_mc=50
         )
         
-        # Plot if we have valid points
         if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000.0
             
@@ -419,17 +473,23 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    marker=markers[idx], 
                    markersize=IEEEStyle.LINE_PROPS['markersize'],
+                   markevery=max(1, len(ranging_rmse_mm)//10),  # Show ~10 markers
                    markerfacecolor='white', 
                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                    label=f'{profile_name.replace("_", " ")}')
     
-    # Add feasibility regions (rest of the code remains the same)
+    # CRITICAL FIX: Adjust x-axis to show micro-meter level data
+    ax.set_xscale('log')
+    ax.set_xlim(5e-4, 100)  # From 0.5 µm to 100 mm
+    ax.set_ylim(0, 10)
+    
+    # Add feasibility regions with proper shading
     ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
     ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
     
     # Add performance thresholds
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(10, 2.1, 'Good communication', 
+    ax.text(0.1, 2.1, 'Good communication', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
     
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
@@ -445,10 +505,6 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
              frameon=True, edgecolor='black', framealpha=0.9)
-    
-    ax.set_xscale('log')
-    ax.set_xlim(left=0.01, right=ax.get_xlim()[1]*1.1)
-    ax.set_ylim(bottom=0, top=ax.get_ylim()[1]*1.1)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -477,28 +533,23 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
     for idx, pe_urad in enumerate(pointing_errors_urad):
         print(f"  Processing σ_θ = {pe_urad} µrad...")
         
-        # Temporarily override pointing error
+        # CRITICAL: Set pointing error for this iteration
+        pe_rad = pe_urad * 1e-6
         original_pe = scenario.pointing_error_rms_rad
-        scenario.pointing_error_rms_rad = pe_urad * 1e-6
+        scenario.pointing_error_rms_rad = pe_rad
         
+        # Create system with updated pointing error
         system = ISACSystem(profile_name)
         
-        # Generate D targets
-        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        D_max = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
-        D_min = D_max / 1000  # Wider range as suggested
-        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), 15)  # More points
-        
-        # USE GRID SEARCH instead of BA (more robust)
-        distortions, capacities = compute_cd_frontier_grid(
+        # Use full grid search for complete frontier
+        distortions, capacities = compute_cd_frontier_grid_full(
             system,
-            D_targets,
-            P_tx_scales=np.logspace(-2, +1, 50),  # Fine power grid
+            P_tx_scales=np.logspace(-2, +2, 60),
             pilot_counts=[system.n_pilots],
             n_mc=50
         )
         
-        # Restore original
+        # Restore original pointing error
         scenario.pointing_error_rms_rad = original_pe
         
         if distortions.size > 0:
@@ -513,16 +564,17 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
                    linestyle=linestyles[idx],
                    marker=markers[idx], 
                    markersize=IEEEStyle.LINE_PROPS['markersize'],
+                   markevery=max(1, len(ranging_rmse_mm)//10),
                    markerfacecolor='white', 
                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                    label=f'σ_θ = {pe_urad} µrad')
     
-    # Performance thresholds - FIXED ORDER
+    # CRITICAL FIX: Adjust x-axis range
     ax.set_xscale('log')
-    ax.set_xlim(0.01, 100)  # Fixed limits BEFORE drawing thresholds
+    ax.set_xlim(5e-4, 100)  # From 0.5 µm to 100 mm
     ax.set_ylim(0, 10)
     
-    # NOW draw thresholds with fixed axes
+    # Performance thresholds
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
     
@@ -859,25 +911,24 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
     """Plot ISAC feasibility regions in parameter space with professional colors."""
     print(f"\n=== Generating {save_name} ===")
     
-    # Parameter ranges
-    tx_power_dBm = np.linspace(25, 40, 25)
+    # Parameter ranges - adjusted for more variation
+    tx_power_dBm = np.linspace(20, 35, 25)  # Lower starting power
     distances_km = np.linspace(500, 5000, 25)
     
     # Create meshgrid
     P, D = np.meshgrid(tx_power_dBm, distances_km)
     
-    # Define feasibility criteria
-    min_capacity = 1.0  # bits/symbol
+    # Define more stringent thresholds for variation
+    min_capacity = 2.0  # bits/symbol
     max_ranging_rmse = 10.0  # mm
-    good_capacity = 2.0
+    good_capacity = 4.0  # Raised
     good_ranging_rmse = 1.0  # mm
-    excellent_capacity = 4.0
+    excellent_capacity = 6.0  # Raised
     excellent_ranging_rmse = 0.1  # mm
     
     # Calculate feasibility for each point
     feasibility = np.zeros_like(P)
     
-    # Data storage
     data_to_save = {
         'tx_power_dBm': tx_power_dBm.tolist(),
         'distance_km': distances_km.tolist()
@@ -886,31 +937,27 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
     print("  Computing feasibility map...")
     for i in tqdm(range(P.shape[0]), desc="    Distance levels"):
         for j in range(P.shape[1]):
-            # Create system with custom power and distance
-            system = ISACSystem("High_Performance", distance=D[i,j]*1e3)
-            system.P_tx_dBm = P[i,j]
-            system.P_tx_watts = 10**(P[i,j]/10) / 1000
+            # CRITICAL: Pass actual tx_power to system
+            system = ISACSystem("High_Performance", 
+                              distance=D[i,j]*1e3,
+                              tx_power_dBm=P[i,j])  # Pass actual power
             
-            # Recalculate link budget
-            system._calculate_enhanced_link_budget()
-            
-            # FIX: Use noise_power_watts instead of N_0
             # Check if link closes
             link_margin_dB = system.P_rx_dBm - 10*np.log10(system.noise_power_watts*1000)
             if link_margin_dB < 0:
                 feasibility[i,j] = 0  # Link doesn't close
                 continue
             
-            # Check communication feasibility
+            # Check communication feasibility with actual power
             p_x = np.ones(len(system.constellation)) / len(system.constellation)
-            I_x = system.calculate_mutual_information(p_x, n_mc=30)
+            I_x = system.calculate_mutual_information(p_x, P_tx_scale=1.0, n_mc=30)
             capacity = np.mean(I_x)
             
             # Check sensing feasibility
-            distortion = system.calculate_distortion(p_x, n_mc=30)
+            distortion = system.calculate_distortion(p_x, P_tx_scale=1.0, n_mc=30)
             ranging_rmse = np.sqrt(distortion) * 1000
             
-            # Determine feasibility level
+            # Determine feasibility level with stricter thresholds
             if capacity >= excellent_capacity and ranging_rmse <= excellent_ranging_rmse:
                 feasibility[i,j] = 5  # Excellent both
             elif capacity >= good_capacity and ranging_rmse <= good_ranging_rmse:
@@ -924,17 +971,18 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
             else:
                 feasibility[i,j] = 0.5  # Link OK but poor performance
     
+    # Rest of plotting code remains the same...
     data_to_save['feasibility_map'] = feasibility.tolist()
     
-    # Create professional colormap (with FIXED colors)
+    # Create professional colormap with CORRECTED colors
     colors_map = [
-        IEEEStyle.COLORS_FEASIBILITY['infeasible'],    # 0: Link fails
+        '#d0d0d0',                                      # 0: Link fails (gray)
         '#ffcccc',                                      # 0.5: Poor performance
         IEEEStyle.COLORS_FEASIBILITY['comm_only'],     # 1: Comm only
         IEEEStyle.COLORS_FEASIBILITY['sense_only'],    # 2: Sense only
         '#a8d8ea',                                      # 3: Acceptable both
         IEEEStyle.COLORS_FEASIBILITY['both'],          # 4: Good both
-        IEEEStyle.COLORS_FEASIBILITY['excellent']      # 5: Excellent both
+        IEEEStyle.COLORS_FEASIBILITY['excellent']      # 5: Excellent both (green)
     ]
     cmap = plt.cm.colors.ListedColormap(colors_map)
     bounds = [0, 0.25, 0.75, 1.5, 2.5, 3.5, 4.5, 5.5]
@@ -990,7 +1038,7 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
                        "ISAC feasibility regions in parameter space")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-    
+
 def modified_blahut_arimoto(system: ISACSystem, D_target: float, 
                            P_tx_scale: float = 1.0,
                            epsilon_lambda: float = 1e-3,
