@@ -64,8 +64,12 @@ class EnhancedCRLBAnalyzer:
         signal_power: float = 1.0, tx_power_dBm: float = None,
         bandwidth_Hz: float = 10e9, frequency_Hz: float = 300e9,
         antenna_diameter: float = None, n_mc: int = 100
-    ) -> Tuple[float, float]:
-        """Calculate effective noise variance with Monte Carlo pointing error averaging."""
+    ) -> Tuple[float, float, float]:  # 返回三个值
+        """Calculate effective noise variance with consistent pointing error handling.
+        
+        Returns:
+            Tuple of (sigma_eff_sq, N_thermal, SNR_eff)
+        """
         if tx_power_dBm is None:
             tx_power_dBm = scenario.default_tx_power_dBm
         if antenna_diameter is None:
@@ -76,48 +80,57 @@ class EnhancedCRLBAnalyzer:
         
         P_tx_watts = 10**(tx_power_dBm/10) / 1000
         
-        # Monte Carlo loop for pointing error
-        pointing_losses = scenario.sample_pointing_loss(
-            frequency_Hz, antenna_diameter, n_samples=n_mc
+        # Use expected pointing loss (analytical formula)
+        pointing_loss_expected = scenario.calculate_pointing_loss_factor(
+            frequency_Hz, antenna_diameter
         )
         
-        # Average received power with pointing error
-        P_rx_avg = P_tx_watts * signal_power * (channel_gain ** 2) * (B ** 2) * np.mean(pointing_losses)
+        # Calculate received power with expected pointing loss
+        P_rx = P_tx_watts * signal_power * (channel_gain ** 2) * (B ** 2) * pointing_loss_expected
         
-        N_0 = P_rx_avg / SNR_linear
-        sigma_hw_sq = P_rx_avg * profile.Gamma_eff
-        phase_noise_factor = np.exp(profile.phase_noise_variance)
+        # Thermal noise
+        noise_figure_linear = 10**(8/10)  # 8 dB noise figure
+        N_thermal = PhysicalConstants.k * 290 * noise_figure_linear * bandwidth_Hz
         
-        # Use parameterized DSE factor instead of hardcoded value
-        sigma_DSE_sq = simulation.kappa_DSE * N_0  # Changed from 0.001 * N_0
+        # Hardware-dependent noise
+        N_hw = P_rx * profile.Gamma_eff * np.exp(profile.phase_noise_variance)
         
-        sigma_eff_sq = N_0 + sigma_hw_sq * phase_noise_factor + sigma_DSE_sq
+        # DSE residual (parameterized)
+        N_DSE = simulation.kappa_DSE * N_thermal
         
-        return sigma_eff_sq, N_0
+        # Total effective noise
+        N_total = N_thermal + N_hw + N_DSE
+        
+        # Effective SNR (for FIM calculation)
+        SNR_eff = P_rx / N_total
+        
+        return N_total, N_thermal, SNR_eff
+
     
     def calculate_observable_bcrlb_mc(
         self, f_c: float, sigma_eff_sq: float, M: int,
         channel_gain: float, B: float, sigma_phi_sq: float,
         T_CPI: float = 1e-3, signal_power: float = 1.0,
-        antenna_diameter: float = None, n_mc: int = 100
+        antenna_diameter: float = None, n_mc: int = 100,
+        SNR_eff: float = None  # 新增参数
     ) -> Dict[str, float]:
-        """Calculate BCRLB for observable parameters with Monte Carlo pointing error."""
+        """Calculate BCRLB using consistent SNR_eff.
+        
+        Now uses SNR_eff directly instead of recalculating with MC.
+        """
         if antenna_diameter is None:
             antenna_diameter = scenario.default_antenna_diameter
-            
+        
+        # Phase and Doppler sensitivity terms
         phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
         doppler_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2 * T_CPI**2)
         
-        # Monte Carlo averaging
-        pointing_losses = scenario.sample_pointing_loss(f_c, antenna_diameter, n_samples=n_mc)
-        
-        # Average performance
-        P_rx_base = signal_power * (channel_gain**2) * (B**2)
-        noise_terms = sigma_eff_sq / (M * P_rx_base * pointing_losses)
+        # Phase noise penalty
         phase_penalty = np.exp(sigma_phi_sq)
         
-        bcrlb_range = phase_term * np.mean(noise_terms) * phase_penalty
-        bcrlb_range_rate = doppler_term * np.mean(noise_terms) * phase_penalty
+        # BCRLB using SNR_eff
+        bcrlb_range = phase_term * phase_penalty / (M * SNR_eff)
+        bcrlb_range_rate = doppler_term * phase_penalty / (M * SNR_eff)
         
         return {
             'range': bcrlb_range,
@@ -132,7 +145,6 @@ class EnhancedCRLBAnalyzer:
         """Plot ranging CRLB vs SNR for all hardware profiles - IEEE style."""
         print(f"\n=== Generating {save_name} ===")
         
-        # Create figure with fixed size
         fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
         
         # Parameters
@@ -140,10 +152,8 @@ class EnhancedCRLBAnalyzer:
         antenna_diameter = scenario.default_antenna_diameter
         tx_power_dBm = scenario.default_tx_power_dBm
         
-        # All hardware profiles
         profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
         
-        # Data storage
         data_to_save = {
             'snr_dB': simulation.SNR_dB_array.tolist(),
             'frequency_GHz': frequency_Hz/1e9,
@@ -151,7 +161,6 @@ class EnhancedCRLBAnalyzer:
             'tx_power_dBm': tx_power_dBm
         }
         
-        # Calculate for each profile
         for i, hardware_profile in enumerate(profiles_to_plot):
             if hardware_profile not in HARDWARE_PROFILES:
                 continue
@@ -161,41 +170,43 @@ class EnhancedCRLBAnalyzer:
             
             ranging_rmse_mm = []
             
-            # Progress bar for Monte Carlo
             print(f"  Processing {hardware_profile}...")
             
             for snr_dB in tqdm(simulation.SNR_dB_array, desc=f"    SNR sweep", leave=False):
                 snr_linear = 10 ** (snr_dB / 10)
                 
                 g = self.calculate_channel_gain(scenario.R_default, frequency_Hz, antenna_diameter)
-                sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
+                
+                # Use new method signature with SNR_eff
+                sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
                     snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
                     frequency_Hz=frequency_Hz, antenna_diameter=antenna_diameter,
                     n_mc=100
                 )
                 
+                # Pass SNR_eff to BCRLB calculation
                 bcrlbs = self.calculate_observable_bcrlb_mc(
                     frequency_Hz, sigma_eff_sq, simulation.n_pilots,
                     g, B, profile.phase_noise_variance,
-                    antenna_diameter=antenna_diameter, n_mc=100
+                    antenna_diameter=antenna_diameter, n_mc=100,
+                    SNR_eff=SNR_eff  # Pass the calculated SNR_eff
                 )
                 
                 rmse_m = np.sqrt(bcrlbs['range'])
                 ranging_rmse_mm.append(rmse_m * 1000)
             
-            # Store data
+            # Store data and plot (rest remains the same)
             data_to_save[f'ranging_rmse_mm_{hardware_profile}'] = ranging_rmse_mm
             
-            # Plot with IEEE style
             ax.semilogy(simulation.SNR_dB_array, ranging_rmse_mm,
-                       color=colors[i], 
-                       linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                       marker=markers[i], 
-                       markersize=IEEEStyle.LINE_PROPS['markersize'],
-                       markevery=10,
-                       markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                       markerfacecolor='white',
-                       label=f'{hardware_profile.replace("_", " ")}')
+                    color=colors[i], 
+                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                    marker=markers[i], 
+                    markersize=IEEEStyle.LINE_PROPS['markersize'],
+                    markevery=10,
+                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                    markerfacecolor='white',
+                    label=f'{hardware_profile.replace("_", " ")}')
         
         # Add performance thresholds
         ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
@@ -519,11 +530,11 @@ class EnhancedCRLBAnalyzer:
         hardware_profile = "High_Performance"
         
         # Thresholds
-        min_link_margin_dB = 3  # Minimum link margin for closure
-        max_ranging_rmse_mm = 1.0  # Sub-mm requirement
-        min_capacity_bits = 2.0  # Good communication
-        max_excellent_rmse_mm = 0.1  # Excellent sensing
-        min_excellent_capacity = 4.0  # Excellent communication
+        min_link_margin_dB = 3
+        max_ranging_rmse_mm = 1.0
+        min_capacity_bits = 2.0
+        max_excellent_rmse_mm = 0.1
+        min_excellent_capacity = 4.0
         
         # Create meshgrid
         D, P = np.meshgrid(antenna_diameters, tx_powers_dBm)
@@ -531,7 +542,6 @@ class EnhancedCRLBAnalyzer:
         # Initialize feasibility map
         feasibility = np.zeros_like(D)
         
-        # Data storage
         data_to_save = {
             'antenna_diameters_m': antenna_diameters.tolist(),
             'tx_powers_dBm': tx_powers_dBm.tolist(),
@@ -544,45 +554,54 @@ class EnhancedCRLBAnalyzer:
                 ant_diam = D[i,j]
                 tx_power = P[i,j]
                 
-                # Check link closure
-                ant_gain = scenario.antenna_gain_dB(ant_diam, f_c)
-                budget = DerivedParameters.link_budget_dB(
-                    tx_power, ant_gain, ant_gain, distance, f_c
-                )
-                noise_dBm = DerivedParameters.thermal_noise_power_dBm(10e9, noise_figure_dB=8)
-                link_margin = budget['rx_power_dBm'] - noise_dBm
+                # Calculate actual link budget
+                P_tx_watts = 10**(tx_power/10) / 1000
                 
-                if link_margin < min_link_margin_dB:
-                    feasibility[i,j] = 0  # Link doesn't close
-                    continue
-                
-                # Check ranging performance at high SNR
-                snr_linear = 10**(simulation.default_SNR_dB/10)
+                # Channel gain with specific antenna
                 g = self.calculate_channel_gain(distance, f_c, ant_diam)
                 B = self.calculate_bussgang_gain()
                 profile = HARDWARE_PROFILES[hardware_profile]
                 
-                sigma_eff_sq, _ = self.calculate_effective_noise_variance_mc(
-                    snr_linear, g, hardware_profile, tx_power_dBm=tx_power,
-                    frequency_Hz=f_c, antenna_diameter=ant_diam, n_mc=50
-                )
+                # Expected pointing loss
+                pointing_loss = scenario.calculate_pointing_loss_factor(f_c, ant_diam)
                 
-                bcrlbs = self.calculate_observable_bcrlb_mc(
-                    f_c, sigma_eff_sq, simulation.n_pilots,
-                    g, B, profile.phase_noise_variance,
-                    antenna_diameter=ant_diam, n_mc=50
-                )
+                # Received power
+                P_rx = P_tx_watts * (g**2) * (B**2) * pointing_loss
                 
-                ranging_rmse_mm = np.sqrt(bcrlbs['range']) * 1000
+                # Thermal noise
+                noise_figure_linear = 10**(8/10)
+                N_thermal = PhysicalConstants.k * 290 * noise_figure_linear * profile.signal_bandwidth_Hz
                 
-                # Simplified capacity estimate
-                capacity = np.log2(1 + snr_linear / (1 + snr_linear * profile.Gamma_eff))
+                # Hardware noise
+                N_hw = P_rx * profile.Gamma_eff * np.exp(profile.phase_noise_variance)
+                
+                # Total noise
+                N_total = N_thermal + N_hw
+                
+                # Actual SNR_eff (not fixed!)
+                SNR_eff = P_rx / N_total
+                
+                # Link margin check
+                link_margin_dB = 10*np.log10(P_rx) - 10*np.log10(N_thermal)
+                
+                if link_margin_dB < min_link_margin_dB:
+                    feasibility[i,j] = 0  # Link doesn't close
+                    continue
+                
+                # Calculate capacity with actual SNR_eff
+                capacity = np.log2(1 + SNR_eff)
+                
+                # Calculate ranging RMSE using BCRLB
+                phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
+                phase_penalty = np.exp(profile.phase_noise_variance)
+                bcrlb_range = phase_term * phase_penalty / (simulation.n_pilots * SNR_eff)
+                ranging_rmse_mm = np.sqrt(bcrlb_range) * 1000
                 
                 # Determine feasibility level
-                comm_ok = capacity >= min_capacity_bits
-                sense_ok = ranging_rmse_mm <= max_ranging_rmse_mm
                 comm_excellent = capacity >= min_excellent_capacity
                 sense_excellent = ranging_rmse_mm <= max_excellent_rmse_mm
+                comm_ok = capacity >= min_capacity_bits
+                sense_ok = ranging_rmse_mm <= max_ranging_rmse_mm
                 
                 if comm_excellent and sense_excellent:
                     feasibility[i,j] = 4  # Excellent both

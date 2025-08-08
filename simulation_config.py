@@ -55,14 +55,14 @@ class IEEEStyle:
         'linewidth': 0.8,
     }
     
-    # Professional color schemes
+    # Professional color schemes - UPDATED
     COLORS_PROFESSIONAL = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
     COLORS_FEASIBILITY = {
-        'infeasible': '#f0f0f0',      # Light gray
-        'comm_only': '#ffd92f',       # Yellow
-        'sense_only': '#4daf4a',      # Green
-        'both': '#1f77b4',            # Blue
-        'excellent': '#d62728'        # Red (for excellent performance)
+        'infeasible': '#d0d0d0',      # Light gray (was #f0f0f0)
+        'comm_only': '#ffd92f',        # Yellow (unchanged)
+        'sense_only': '#87ceeb',       # Sky blue (was #4daf4a)
+        'both': '#1f77b4',             # Blue (unchanged)
+        'excellent': '#2ca02c'         # GREEN (was #d62728 red) - FIXED!
     }
     
     @staticmethod
@@ -472,14 +472,13 @@ class SimulationControl:
     SNR_dB_max: float = 60
     SNR_dB_points: int = 71
     
-    # Enhanced default SNR for fixed-SNR analyses
     default_SNR_dB: float = 40
     
     n_monte_carlo: int = 1000
     n_pilots: int = 64
     
-    # DSE residual factor (new parameter)
-    kappa_DSE: float = 1e-3  # DSE residual as fraction of AWGN noise
+    # DSE residual factor (parameterized)
+    kappa_DSE: float = 1e-3  # DSE residual as fraction of thermal noise
     
     f_c_sweep_points: int = 10
     gamma_eff_sweep: List[float] = None
@@ -488,7 +487,7 @@ class SimulationControl:
     def __post_init__(self):
         """Initialize sweep arrays."""
         self.gamma_eff_sweep = np.logspace(-3, -1, 20).tolist()
-        self.pointing_error_sweep = [0.5e-6, 1e-6, 2e-6]  # [0.5, 1, 2] µrad
+        self.pointing_error_sweep = [0.5e-6, 1e-6, 2e-6]
     
     @property
     def SNR_dB_array(self) -> np.ndarray:

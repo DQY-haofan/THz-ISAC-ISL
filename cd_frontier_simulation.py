@@ -469,7 +469,6 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
     profile_name = "High_Performance"
     pointing_errors_urad = [0.5, 1.0, 2.0]  # µrad
     
-    # Data storage
     data_to_save = {
         'hardware_profile': profile_name,
         'pointing_errors_urad': pointing_errors_urad
@@ -484,37 +483,29 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
         
         system = ISACSystem(profile_name)
         
-        # Generate C-D points
-        n_points = 10
-        distortions = []
-        capacities = []
-        
+        # Generate D targets
         p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        D_max = system.calculate_distortion(p_uniform, n_mc=50)
-        D_min = D_max / 100
+        D_max = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
+        D_min = D_max / 1000  # Wider range as suggested
+        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), 15)  # More points
         
-        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), n_points)
-        
-        for D_target in D_targets:
-            capacity, p_opt = modified_blahut_arimoto(
-                system, D_target, P_tx_scale=1.0, n_mc=50,
-                max_iterations=20, verbose=False
-            )
-            
-            actual_D = system.calculate_distortion(p_opt, n_mc=50)
-            
-            if 0 < actual_D < 1e10 and capacity >= 0:
-                distortions.append(actual_D)
-                capacities.append(capacity)
+        # USE GRID SEARCH instead of BA (more robust)
+        distortions, capacities = compute_cd_frontier_grid(
+            system,
+            D_targets,
+            P_tx_scales=np.logspace(-2, +1, 50),  # Fine power grid
+            pilot_counts=[system.n_pilots],
+            n_mc=50
+        )
         
         # Restore original
         scenario.pointing_error_rms_rad = original_pe
         
-        if len(distortions) > 0:
+        if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000
             
             data_to_save[f'ranging_rmse_mm_{pe_urad}urad'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{pe_urad}urad'] = capacities
+            data_to_save[f'capacity_{pe_urad}urad'] = capacities.tolist()
             
             ax.plot(ranging_rmse_mm, capacities,
                    color=colors[idx], 
@@ -526,7 +517,12 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                    label=f'σ_θ = {pe_urad} µrad')
     
-    # Add performance thresholds
+    # Performance thresholds - FIXED ORDER
+    ax.set_xscale('log')
+    ax.set_xlim(0.01, 100)  # Fixed limits BEFORE drawing thresholds
+    ax.set_ylim(0, 10)
+    
+    # NOW draw thresholds with fixed axes
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
     
@@ -538,10 +534,6 @@ def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity
     
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    
-    ax.set_xscale('log')
-    ax.set_xlim(left=0.01, right=ax.get_xlim()[1]*1.1)
-    ax.set_ylim(bottom=0, top=ax.get_ylim()[1]*1.1)
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
