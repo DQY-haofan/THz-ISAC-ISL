@@ -116,14 +116,13 @@ class EnhancedISACSystem:
         self.P_rx_dBm = link_budget['rx_power_dBm']
         self.P_rx_watts = 10**(self.P_rx_dBm/10) / 1000
         
-        # Noise parameters - FIXED
+        # Noise parameters - RENAMED FOR CLARITY
         self.noise_figure_dB = 8
         self.bandwidth_Hz = self.profile.signal_bandwidth_Hz
         
-        # Calculate noise power correctly
+        # Calculate total noise power (not PSD)
         noise_temp_K = 290 * 10**(self.noise_figure_dB/10)
-        self.N_0 = PhysicalConstants.k * noise_temp_K * self.bandwidth_Hz
-        self.noise_power_watts = self.N_0
+        self.noise_power_watts = PhysicalConstants.k * noise_temp_K * self.bandwidth_Hz  # Renamed from N_0
         self.noise_power_dBm = 10 * np.log10(self.noise_power_watts * 1000)
         
         # FIXED: Channel gain calculation
@@ -134,9 +133,7 @@ class EnhancedISACSystem:
         # Total channel gain magnitude |g|
         self.channel_gain = np.sqrt(G_tx_linear * G_rx_linear * path_loss_linear)
         
-        # FIXED: Link margin calculation (should be positive for a working link)
-        # Note: For ISAC, we need to consider effective SNR, not just raw link margin
-        # The negative value might be correct when considering full bandwidth noise
+        # Link margin calculation
         self.link_margin_dB = self.P_rx_dBm - self.noise_power_dBm
     
     def _calculate_bussgang_gain(self, input_backoff_dB: float = 7.0) -> float:
@@ -441,8 +438,11 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
         )
         
         # Find SNR where capacity reaches 95% of ceiling
+         # 修正这一行：添加 phase_noise_variance 参数
         hw_limit_snr = DerivedParameters.find_snr_for_hardware_limit(
-            system.profile.Gamma_eff, 0.95
+            system.profile.Gamma_eff, 
+            system.profile.phase_noise_variance,  # 添加这个参数
+            0.95
         )
         diagnostics.add_key_metric(
             "Capacity_vs_SNR",

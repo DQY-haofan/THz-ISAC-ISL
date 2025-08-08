@@ -469,16 +469,19 @@ class SimulationControl:
     """Parameters controlling simulation execution."""
     
     SNR_dB_min: float = -10
-    SNR_dB_max: float = 60      # Extended for THz
+    SNR_dB_max: float = 60
     SNR_dB_points: int = 71
     
     # Enhanced default SNR for fixed-SNR analyses
-    default_SNR_dB: float = 40   # High SNR for THz analyses
+    default_SNR_dB: float = 40
     
-    n_monte_carlo: int = 1000    # Monte Carlo samples for pointing error
+    n_monte_carlo: int = 1000
     n_pilots: int = 64
     
-    f_c_sweep_points: int = 10   # Include 1THz
+    # DSE residual factor (new parameter)
+    kappa_DSE: float = 1e-3  # DSE residual as fraction of AWGN noise
+    
+    f_c_sweep_points: int = 10
     gamma_eff_sweep: List[float] = None
     pointing_error_sweep: List[float] = None
     
@@ -552,9 +555,26 @@ class DerivedParameters:
         return np.log2(1 + phase_factor / Gamma_eff)
     
     @staticmethod
-    def find_snr_for_hardware_limit(Gamma_eff: float, target_ratio: float = 0.95) -> float:
-        """Find SNR where capacity reaches target_ratio of hardware ceiling."""
-        return 10 * np.log10((1/Gamma_eff) / (1 - target_ratio))
+    def find_snr_for_hardware_limit(Gamma_eff: float, sigma_phi_sq: float, target_ratio: float = 0.95) -> float:
+        """Find SNR where capacity reaches target_ratio of hardware ceiling.
+        
+        Model: SINR_eff = SNR / (1 + Gamma_eff * exp(sigma_phi_sq) * SNR)
+        Target: C = log2(1 + SINR_eff) = target_ratio * log2(1 + exp(-sigma_phi_sq)/Gamma_eff)
+        Solution: SNR = (target_ratio / (1 - target_ratio)) * exp(sigma_phi_sq) / Gamma_eff
+        
+        Args:
+            Gamma_eff: Hardware quality factor
+            sigma_phi_sq: Phase noise variance [rad²]
+            target_ratio: Target ratio of ceiling (default 0.95)
+            
+        Returns:
+            SNR in dB where capacity reaches target_ratio of ceiling
+        """
+        if target_ratio >= 1.0 or target_ratio <= 0:
+            raise ValueError("target_ratio must be in (0, 1)")
+            
+        snr_linear = (target_ratio / (1.0 - target_ratio)) * np.exp(sigma_phi_sq) / Gamma_eff
+        return 10.0 * np.log10(snr_linear)
 
 # =============================================================================
 # OBSERVABLE PARAMETERS

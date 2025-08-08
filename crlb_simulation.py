@@ -87,7 +87,9 @@ class EnhancedCRLBAnalyzer:
         N_0 = P_rx_avg / SNR_linear
         sigma_hw_sq = P_rx_avg * profile.Gamma_eff
         phase_noise_factor = np.exp(profile.phase_noise_variance)
-        sigma_DSE_sq = 0.001 * N_0
+        
+        # Use parameterized DSE factor instead of hardcoded value
+        sigma_DSE_sq = simulation.kappa_DSE * N_0  # Changed from 0.001 * N_0
         
         sigma_eff_sq = N_0 + sigma_hw_sq * phase_noise_factor + sigma_DSE_sq
         

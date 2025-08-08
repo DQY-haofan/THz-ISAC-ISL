@@ -144,6 +144,62 @@ class ISACSystem:
         # Ensure real and positive
         return np.real(np.abs(sinr))
     
+    def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=None, n_mc=100):
+        """
+        Compute C-D frontier using grid search over power and pilot configurations.
+        
+        Args:
+            system: ISACSystem instance
+            D_targets: Array of target distortion values
+            P_tx_scales: Power scaling factors to search (default: logspace)
+            pilot_counts: Pilot count options (default: current system setting)
+            n_mc: Monte Carlo samples for averaging
+            
+        Returns:
+            Tuple of (distortions, capacities) arrays forming the frontier
+        """
+        if P_tx_scales is None:
+            P_tx_scales = np.logspace(-2, +1, 60)  # 0.01x to 10x power scaling
+        if pilot_counts is None:
+            pilot_counts = [system.n_pilots]  # Can expand to [32, 64, 128] for richer frontier
+        
+        # Uniform constellation distribution
+        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+        
+        frontier_D = []
+        frontier_C = []
+        
+        for D_target in D_targets:
+            best_C = -1.0
+            best_D = None
+            
+            for M in pilot_counts:
+                # Temporarily update pilot count
+                old_M = system.n_pilots
+                system.n_pilots = M
+                
+                for s in P_tx_scales:
+                    # Calculate capacity
+                    I_vec = system.calculate_mutual_information(p_uniform, P_tx_scale=s, n_mc=n_mc)
+                    C_here = float(np.mean(I_vec))
+                    
+                    # Calculate distortion
+                    D_here = system.calculate_distortion(p_uniform, P_tx_scale=s, n_mc=n_mc)
+                    
+                    # Check if this is a better feasible point
+                    if 0 < D_here < 1e10 and D_here <= D_target * 1.1 and C_here > best_C:  # 10% tolerance
+                        best_C = C_here
+                        best_D = D_here
+                
+                # Restore original pilot count
+                system.n_pilots = old_M
+            
+            if best_C >= 0:
+                frontier_D.append(best_D)
+                frontier_C.append(best_C)
+        
+        return np.array(frontier_D), np.array(frontier_C)
+    
     def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
                                n_mc: int = 100) -> np.ndarray:
         """Calculate mutual information with MC averaging."""
@@ -275,35 +331,27 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
         print(f"  Processing {profile_name}...")
         system = ISACSystem(profile_name)
         
-        # Generate C-D points
-        n_points = 12
-        distortions = []
-        capacities = []
-        
-        # Find distortion range
+        # Generate D targets
         p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-        D_max = system.calculate_distortion(p_uniform, n_mc=50)
-        D_min = D_max / 1000
+        D_max = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
+        D_min = D_max / 1000.0
+        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), 12)
         
-        D_targets = np.logspace(np.log10(D_min), np.log10(D_max), n_points)
+        # Use grid search to compute frontier
+        distortions, capacities = compute_cd_frontier_grid(
+            system,
+            D_targets,
+            P_tx_scales=np.logspace(-2, +1, 60),  # More power points for smoother curve
+            pilot_counts=[system.n_pilots],  # Or [32, 64, 128] for richer analysis
+            n_mc=50
+        )
         
-        for D_target in tqdm(D_targets, desc=f"    D targets", leave=False):
-            capacity, p_opt = modified_blahut_arimoto(
-                system, D_target, P_tx_scale=1.0, n_mc=50,
-                max_iterations=30, verbose=False
-            )
-            
-            actual_D = system.calculate_distortion(p_opt, n_mc=50)
-            
-            if 0 < actual_D < 1e10 and capacity >= 0:
-                distortions.append(actual_D)
-                capacities.append(capacity)
-        
-        if len(distortions) > 0:
-            ranging_rmse_mm = np.sqrt(distortions) * 1000
+        # Plot if we have valid points
+        if distortions.size > 0:
+            ranging_rmse_mm = np.sqrt(distortions) * 1000.0
             
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{profile_name}'] = capacities
+            data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
             
             ax.plot(ranging_rmse_mm, capacities,
                    color=colors[idx], 
@@ -314,7 +362,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                    label=f'{profile_name.replace("_", " ")}')
     
-    # Add feasibility regions
+    # Add feasibility regions (rest of the code remains the same)
     ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
     ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
     
@@ -334,7 +382,8 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
+             frameon=True, edgecolor='black', framealpha=0.9)
     
     ax.set_xscale('log')
     ax.set_xlim(left=0.01, right=ax.get_xlim()[1]*1.1)
