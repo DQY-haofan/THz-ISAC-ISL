@@ -374,37 +374,24 @@ class ISACSystem:
 # ENHANCED PLOT FUNCTIONS
 # =========================================================================
 
-def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=None, n_mc=100):
-    """
-    Compute C-D frontier using grid search over power and pilot configurations.
-    
-    Args:
-        system: ISACSystem instance
-        D_targets: Array of target distortion values
-        P_tx_scales: Power scaling factors to search (default: logspace)
-        pilot_counts: Pilot count options (default: current system setting)
-        n_mc: Monte Carlo samples for averaging
+def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n_mc=100):
+        """
+        Compute full C-D frontier with multiple points using grid search.
         
-    Returns:
-        Tuple of (distortions, capacities) arrays forming the frontier
-    """
-    if P_tx_scales is None:
-        P_tx_scales = np.logspace(-2, +1, 60)  # 0.01x to 10x power scaling
-    if pilot_counts is None:
-        pilot_counts = [system.n_pilots]  # Can expand to [32, 64, 128] for richer frontier
-    
-    # Uniform constellation distribution
-    p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-    
-    frontier_D = []
-    frontier_C = []
-    
-    for D_target in tqdm(D_targets, desc="    Computing frontier", leave=False):
-        best_C = -1.0
-        best_D = None
+        Returns arrays of (distortions, capacities) forming the complete frontier.
+        """
+        if P_tx_scales is None:
+            P_tx_scales = np.logspace(-2, +2, 80)  # Wider range for complete frontier
+        if pilot_counts is None:
+            pilot_counts = [system.n_pilots]
         
+        p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+        
+        all_D = []
+        all_C = []
+        
+        # Compute all (D, C) pairs
         for M in pilot_counts:
-            # Temporarily update pilot count
             old_M = system.n_pilots
             system.n_pilots = M
             
@@ -417,23 +404,34 @@ def compute_cd_frontier_grid(system, D_targets, P_tx_scales=None, pilot_counts=N
                     # Calculate distortion
                     D_here = system.calculate_distortion(p_uniform, P_tx_scale=s, n_mc=n_mc)
                     
-                    # Check if this is a better feasible point
-                    if 0 < D_here < 1e10 and D_here <= D_target * 1.1 and C_here > best_C:  # 10% tolerance
-                        best_C = C_here
-                        best_D = D_here
+                    if 0 < D_here < 1e10 and C_here > 0:
+                        all_D.append(D_here)
+                        all_C.append(C_here)
                 except:
-                    # Skip invalid points
                     continue
             
-            # Restore original pilot count
             system.n_pilots = old_M
         
-        if best_C >= 0:
-            frontier_D.append(best_D)
-            frontier_C.append(best_C)
-    
-    return np.array(frontier_D), np.array(frontier_C)
-
+        if len(all_D) == 0:
+            return np.array([]), np.array([])
+        
+        # Sort by distortion and extract Pareto frontier
+        sorted_idx = np.argsort(all_D)
+        D_sorted = np.array(all_D)[sorted_idx]
+        C_sorted = np.array(all_C)[sorted_idx]
+        
+        # Extract Pareto optimal points (non-dominated)
+        pareto_D = [D_sorted[0]]
+        pareto_C = [C_sorted[0]]
+        max_C = C_sorted[0]
+        
+        for i in range(1, len(D_sorted)):
+            if C_sorted[i] > max_C:  # Higher capacity at higher distortion
+                pareto_D.append(D_sorted[i])
+                pareto_C.append(C_sorted[i])
+                max_C = C_sorted[i]
+        
+        return np.array(pareto_D), np.array(pareto_C)
 
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     """Plot C-D frontier for all hardware profiles."""
