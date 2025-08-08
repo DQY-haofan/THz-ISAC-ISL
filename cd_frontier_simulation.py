@@ -412,135 +412,75 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n
     
     return np.array(pareto_D), np.array(pareto_C)
 
-# 完整替换 plot_cd_frontier_all_profiles 函数
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
-    """Plot C-D frontier for all hardware profiles with complete curves."""
+    """
+    C–D Pareto frontiers by sweeping Tx power scale and pilot count.
+    Lines: Pareto sets; Filled markers: the nominal operating points.
+    """
     print(f"\n=== Generating {save_name} ===")
-    
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
-    
-    profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
-    
-    # Data storage
-    data_to_save = {
-        'hardware_profiles': profiles_to_plot
-    }
-    
-    for idx, profile_name in enumerate(profiles_to_plot):
-        if profile_name not in HARDWARE_PROFILES:
-            continue
-            
-        print(f"  Processing {profile_name}...")
-        
-        # Create system with specified parameters
-        system = ISACSystem(
-            hardware_profile=profile_name,
-            f_c=300e9,
-            distance=scenario.R_default,
-            n_pilots=64,  # Default for system creation
-            antenna_diameter=scenario.default_antenna_diameter,
-            tx_power_dBm=scenario.default_tx_power_dBm
-        )
-        
-        # CRITICAL: Use compute_cd_frontier_grid_full with multiple pilot counts
-        distortions, capacities = compute_cd_frontier_grid_full(
-            system,
-            P_tx_scales=np.logspace(-2, +2, 100),  # Fine power grid
-            pilot_counts=[16, 32, 64, 128, 256],   # Multiple pilot options for richer frontier
-            n_mc=50
-        )
-        
-        if distortions.size > 0:
-            ranging_rmse_mm = np.sqrt(distortions) * 1000.0
-            
-            # Store complete frontier data
-            data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
-            data_to_save[f'num_points_{profile_name}'] = len(capacities)
-            
-            # Plot complete frontier curve
-            ax.plot(ranging_rmse_mm, capacities,
-                   color=colors[idx], 
-                   linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                   linestyle='-',  # Solid line for frontier
-                   label=f'{profile_name.replace("_", " ")}')
-            
-            # Add markers at selected points for visibility
-            marker_indices = np.linspace(0, len(ranging_rmse_mm)-1, 
-                                        min(10, len(ranging_rmse_mm)), dtype=int)
-            ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
-                   color=colors[idx],
-                   linestyle='None',
-                   marker=markers[idx], 
-                   markersize=IEEEStyle.LINE_PROPS['markersize'],
-                   markerfacecolor='white', 
-                   markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
-            
-            # Mark typical operating point (at default power and pilots)
-            # Calculate operating point with default settings
-            p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-            system.n_pilots = 64  # Default pilots
-            I_op = system.calculate_mutual_information(p_uniform, P_tx_scale=1.0, n_mc=50)
-            C_op = np.mean(I_op)
-            D_op = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
-            rmse_op = np.sqrt(D_op) * 1000
-            
-            # Mark operating point with larger marker
-            ax.plot(rmse_op, C_op, 
-                   color=colors[idx],
-                   marker=markers[idx],
-                   markersize=IEEEStyle.LINE_PROPS['markersize']*1.5,
-                   markerfacecolor=colors[idx],
-                   markeredgewidth=2,
-                   markeredgecolor='white',
-                   zorder=10)  # Ensure it's on top
-    
-    # CRITICAL: Adjust x-axis to show micro-meter level data
-    ax.set_xscale('log')
-    ax.set_xlim(1e-4, 100)  # From 0.1 µm to 100 mm
-    ax.set_ylim(0, 10)
-    
-    # Add feasibility regions with proper shading
-    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
-    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
-    
-    # Add performance thresholds
-    ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(1e-2, 2.1, 'Good communication', 
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
-    
-    ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(0.8, ax.get_ylim()[1]*0.7, 'Sub-mm\nsensing', ha='right',
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
-    
-    # Add annotation for operating points
-    ax.text(0.5, 8.5, 'Lines: Pareto frontier\nFilled markers: Operating points',
-           fontsize=IEEEStyle.FONT_SIZES['annotation']-1,
-           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    
-    # Labels
-    ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Communication Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('C-D Trade-off Frontiers (Varying Power & Pilots)',
-                fontsize=IEEEStyle.FONT_SIZES['title'])
-    
-    ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
-             frameon=True, edgecolor='black', framealpha=0.9)
-    
+
+    profiles = ["State_of_Art","High_Performance","SWaP_Efficient","Low_Cost"]
+    colors  = IEEEStyle.get_colors()
+    markers = IEEEStyle.get_markers()
+
+    # 扫描范围：功率 1/100 – 10 倍；导频数 16–256
+    P_scales = np.logspace(-2, +1, 60)
+    M_list   = [16, 32, 64, 128, 256]
+
+    for k, prof in enumerate(profiles):
+        sys = ISACSystem(prof, f_c=300e9, distance=scenario.R_default,
+                         n_pilots=64, antenna_diameter=scenario.default_antenna_diameter)
+
+        D_list, C_list = [], []
+        for M in M_list:
+            for s in P_scales:
+                # ——容量：直接用系统里的 SINR 近似（均匀分布）
+                p_uni = np.ones(len(sys.constellation)) / len(sys.constellation)
+                I_x   = sys.calculate_mutual_information(p_uni, P_tx_scale=s, n_mc=80)
+                C     = float(np.mean(I_x))  # 对均匀分布求平均即可
+
+                # ——失真：用 BCRLB（与系统其余路径一致）
+                J     = sys.calculate_bfim_observable_mc(avg_power=1.0, P_tx_scale=s, n_mc=80)
+                D     = float(J[0,0])  # range variance
+
+                if 0 < D < 1e10:
+                    D_list.append(D); C_list.append(C)
+
+        # Pareto 取前沿（按 D 升序取 C 的上包络）
+        D_arr = np.array(D_list); C_arr = np.array(C_list)
+        order = np.argsort(D_arr)
+        D_arr, C_arr = D_arr[order], C_arr[order]
+        mask = np.ones_like(D_arr, dtype=bool)
+        C_best = -1
+        for i in range(len(D_arr)):
+            if C_arr[i] > C_best:
+                C_best = C_arr[i]
+            else:
+                mask[i] = False
+        D_front, C_front = D_arr[mask], C_arr[mask]
+
+        # 画前沿曲线
+        ax.plot(np.sqrt(D_front)*1e3, C_front, color=colors[k],
+                lw=IEEEStyle.LINE_PROPS['linewidth'], label=prof.replace('_',' '))
+
+        # 标注一个“代表工作点”（默认功率与 n_pilots）
+        J0 = sys.calculate_bfim_observable_mc(avg_power=1.0, P_tx_scale=1.0, n_mc=120)
+        D0 = float(J0[0,0]); C0 = float(np.mean(sys.calculate_mutual_information(p_uni, 1.0, 120)))
+        ax.plot(np.sqrt(D0)*1e3, C0, marker=markers[k], ms=IEEEStyle.LINE_PROPS['markersize'],
+                color=colors[k], markerfacecolor='white', markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
+
+    # 阈值与装饰
+    ax.set_xscale('log'); ax.set_xlim(5e-4, 1e0); ax.set_ylim(0, 10)
+    ax.axhline(2.0, ls=':', color='green'); ax.text(1.3, 2.05, 'Good communication', color='green')
+    ax.axvline(1.0, ls=':', color='blue');  ax.text(1.05, 7.5, 'Sub-mm sensing', color='blue', rotation=90, va='top')
+    ax.set_xlabel('Ranging RMSE (mm)'); ax.set_ylabel('Communication Capacity (bits/symbol)')
+    ax.set_title('C–D Trade-off Frontiers (Varying Power & Pilots)')
+    ax.legend(loc='best'); ax.grid(True, **IEEEStyle.GRID_PROPS)
     plt.tight_layout()
-    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', dpi=300, bbox_inches='tight')
     plt.close()
-    
-    # Save data with diagnostic info
-    data_saver.save_data(save_name, data_to_save,
-                       "C-D frontier for all hardware profiles (complete Pareto curves)")
-    
-    print(f"Saved: results/{save_name}.pdf/png and data")
-    for profile in profiles_to_plot:
-        if f'num_points_{profile}' in data_to_save:
-            print(f"  {profile}: {data_to_save[f'num_points_{profile}']} frontier points")
 
 
 # 替换 plot_cd_frontier_pointing_sensitivity 函数
