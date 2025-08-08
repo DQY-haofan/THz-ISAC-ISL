@@ -854,6 +854,7 @@ def plot_3d_cd_landscape(save_name='fig_3d_cd_landscape'):
     
     print(f"Saved: results/{save_name}_[capacity/rmse]_[views].pdf/png and data")
 
+
 def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
     """Plot ISAC feasibility regions in parameter space with professional colors."""
     print(f"\n=== Generating {save_name} ===")
@@ -885,7 +886,7 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
     print("  Computing feasibility map...")
     for i in tqdm(range(P.shape[0]), desc="    Distance levels"):
         for j in range(P.shape[1]):
-            # Create system with custom power
+            # Create system with custom power and distance
             system = ISACSystem("High_Performance", distance=D[i,j]*1e3)
             system.P_tx_dBm = P[i,j]
             system.P_tx_watts = 10**(P[i,j]/10) / 1000
@@ -893,8 +894,10 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
             # Recalculate link budget
             system._calculate_enhanced_link_budget()
             
+            # FIX: Use noise_power_watts instead of N_0
             # Check if link closes
-            if system.P_rx_dBm - 10*np.log10(system.N_0*1000) < 0:
+            link_margin_dB = system.P_rx_dBm - 10*np.log10(system.noise_power_watts*1000)
+            if link_margin_dB < 0:
                 feasibility[i,j] = 0  # Link doesn't close
                 continue
             
@@ -923,7 +926,7 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
     
     data_to_save['feasibility_map'] = feasibility.tolist()
     
-    # Create professional colormap
+    # Create professional colormap (with FIXED colors)
     colors_map = [
         IEEEStyle.COLORS_FEASIBILITY['infeasible'],    # 0: Link fails
         '#ffcccc',                                      # 0.5: Poor performance
@@ -987,7 +990,7 @@ def plot_isac_feasibility_regions(save_name='fig_isac_feasibility'):
                        "ISAC feasibility regions in parameter space")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-
+    
 def modified_blahut_arimoto(system: ISACSystem, D_target: float, 
                            P_tx_scale: float = 1.0,
                            epsilon_lambda: float = 1e-3,

@@ -279,15 +279,19 @@ class EnhancedCRLBAnalyzer:
             snr_linear = 10 ** (snr_dB / 10)
             
             g = self.calculate_channel_gain(scenario.R_default, f_Hz, antenna_diameter)
-            sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
+            
+            # FIX: Now expecting 3 return values
+            sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
                 snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
                 frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=100
             )
             
+            # Pass SNR_eff to BCRLB calculation
             bcrlbs = self.calculate_observable_bcrlb_mc(
                 f_Hz, sigma_eff_sq, simulation.n_pilots,
                 g, B, profile.phase_noise_variance,
-                antenna_diameter=antenna_diameter, n_mc=100
+                antenna_diameter=antenna_diameter, n_mc=100,
+                SNR_eff=SNR_eff  # Pass the calculated SNR_eff
             )
             
             rmse_m = np.sqrt(bcrlbs['range'])
@@ -297,27 +301,27 @@ class EnhancedCRLBAnalyzer:
         
         # Plot
         ax.loglog(frequencies_GHz, ranging_rmse_mm,
-                 color=colors[0], 
-                 linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                 marker=markers[0], 
-                 markersize=IEEEStyle.LINE_PROPS['markersize'],
-                 markerfacecolor='white',
-                 markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                 label='Actual Performance')
+                color=colors[0], 
+                linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                marker=markers[0], 
+                markersize=IEEEStyle.LINE_PROPS['markersize'],
+                markerfacecolor='white',
+                markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                label='Actual Performance')
         
         # Add theoretical f^-2 scaling
         f_ref = 300
         rmse_ref = ranging_rmse_mm[np.where(frequencies_GHz == f_ref)[0][0]]
         theoretical = rmse_ref * (f_ref / frequencies_GHz)**2
         ax.loglog(frequencies_GHz, theoretical, 
-                 color=colors[0], linestyle='--', 
-                 linewidth=IEEEStyle.LINE_PROPS['linewidth']-0.5,
-                 label='$f^{-2}$ scaling')
+                color=colors[0], linestyle='--', 
+                linewidth=IEEEStyle.LINE_PROPS['linewidth']-0.5,
+                label='$f^{-2}$ scaling')
         
         # Highlight 1THz
         ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
         ax.text(1000, ax.get_ylim()[0]*2, '1 THz', 
-               ha='center', fontsize=IEEEStyle.FONT_SIZES['annotation'], color='red')
+            ha='center', fontsize=IEEEStyle.FONT_SIZES['annotation'], color='red')
         
         # Performance threshold
         ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
@@ -340,10 +344,11 @@ class EnhancedCRLBAnalyzer:
         plt.close()
         
         data_saver.save_data(save_name, data_to_save,
-                           "Ranging performance vs frequency scaling")
+                        "Ranging performance vs frequency scaling")
         
         print(f"Saved: results/{save_name}.pdf/png and data")
-    
+
+
     def plot_velocity_vs_frequency(self, save_name='fig_velocity_vs_frequency'):
         """Plot velocity estimation performance vs frequency (separate plot)."""
         print(f"\n=== Generating {save_name} ===")
@@ -374,15 +379,19 @@ class EnhancedCRLBAnalyzer:
             snr_linear = 10 ** (snr_dB / 10)
             
             g = self.calculate_channel_gain(scenario.R_default, f_Hz, antenna_diameter)
-            sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
+            
+            # FIX: Now expecting 3 return values
+            sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
                 snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
                 frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=100
             )
             
+            # Pass SNR_eff to BCRLB calculation
             bcrlbs = self.calculate_observable_bcrlb_mc(
                 f_Hz, sigma_eff_sq, simulation.n_pilots,
                 g, B, profile.phase_noise_variance,
-                antenna_diameter=antenna_diameter, n_mc=100
+                antenna_diameter=antenna_diameter, n_mc=100,
+                SNR_eff=SNR_eff  # Pass the calculated SNR_eff
             )
             
             rmse_v = np.sqrt(bcrlbs['range_rate'])
@@ -392,12 +401,12 @@ class EnhancedCRLBAnalyzer:
         
         # Plot
         ax.loglog(frequencies_GHz, velocity_rmse_ms,
-                 color=colors[1], 
-                 linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                 marker=markers[1], 
-                 markersize=IEEEStyle.LINE_PROPS['markersize'],
-                 markerfacecolor='white',
-                 markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
+                color=colors[1], 
+                linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                marker=markers[1], 
+                markersize=IEEEStyle.LINE_PROPS['markersize'],
+                markerfacecolor='white',
+                markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
         
         # Highlight 1THz
         ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
@@ -419,10 +428,10 @@ class EnhancedCRLBAnalyzer:
         plt.close()
         
         data_saver.save_data(save_name, data_to_save,
-                           "Velocity estimation performance vs frequency")
+                        "Velocity estimation performance vs frequency")
         
         print(f"Saved: results/{save_name}.pdf/png and data")
-    
+
     def plot_pointing_error_sensitivity(self, save_name='fig_pointing_error_sensitivity'):
         """Plot sensitivity to pointing error - standalone."""
         print(f"\n=== Generating {save_name} ===")
@@ -459,15 +468,18 @@ class EnhancedCRLBAnalyzer:
             for snr_dB in tqdm(simulation.SNR_dB_array, desc="    SNR sweep", leave=False):
                 snr_linear = 10**(snr_dB/10)
                 
-                sigma_eff_sq, N_0 = self.calculate_effective_noise_variance_mc(
+                # FIX: Now expecting 3 return values
+                sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
                     snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
                     frequency_Hz=f_c, antenna_diameter=antenna_diameter, n_mc=100
                 )
                 
+                # Pass SNR_eff to BCRLB calculation
                 bcrlbs = self.calculate_observable_bcrlb_mc(
                     f_c, sigma_eff_sq, simulation.n_pilots,
                     g, B, profile.phase_noise_variance,
-                    antenna_diameter=antenna_diameter, n_mc=100
+                    antenna_diameter=antenna_diameter, n_mc=100,
+                    SNR_eff=SNR_eff  # Pass the calculated SNR_eff
                 )
                 
                 ranging_rmse_mm.append(np.sqrt(bcrlbs['range']) * 1000)
@@ -479,20 +491,20 @@ class EnhancedCRLBAnalyzer:
             
             # Plot
             ax.semilogy(simulation.SNR_dB_array, ranging_rmse_mm,
-                       color=colors[idx], 
-                       linewidth=IEEEStyle.LINE_PROPS['linewidth'],
-                       linestyle=linestyles[idx],
-                       marker=markers[idx],
-                       markersize=IEEEStyle.LINE_PROPS['markersize'],
-                       markevery=10,
-                       markerfacecolor='white',
-                       markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                       label=f'σ_θ = {pe_urad} µrad')
+                    color=colors[idx], 
+                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                    linestyle=linestyles[idx],
+                    marker=markers[idx],
+                    markersize=IEEEStyle.LINE_PROPS['markersize'],
+                    markevery=10,
+                    markerfacecolor='white',
+                    markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                    label=f'σ_θ = {pe_urad} µrad')
         
         # Add performance threshold
         ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
         ax.text(35, 1.2, 'Sub-mm threshold', 
-               fontsize=IEEEStyle.FONT_SIZES['annotation'], color='gray')
+            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='gray')
         
         # Labels
         ax.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
@@ -510,9 +522,10 @@ class EnhancedCRLBAnalyzer:
         plt.close()
         
         data_saver.save_data(save_name, data_to_save,
-                           "Pointing error sensitivity analysis")
+                        "Pointing error sensitivity analysis")
         
         print(f"Saved: results/{save_name}.pdf/png and data")
+
     
     def plot_feasibility_map(self, save_name='fig_feasibility_map'):
         """Plot 2D feasibility map for antenna size vs transmit power."""
@@ -681,6 +694,7 @@ class EnhancedCRLBAnalyzer:
         
         print(f"Saved: results/{save_name}.pdf/png and data")
     
+    # 修复 plot_3d_performance_landscape 方法（相关部分）
     def plot_3d_performance_landscape(self, save_name='fig_3d_performance_landscape'):
         """Plot 3D performance landscape with multiple viewing angles."""
         print(f"\n=== Generating {save_name} ===")
@@ -712,18 +726,21 @@ class EnhancedCRLBAnalyzer:
                 B = self.calculate_bussgang_gain()
                 profile = HARDWARE_PROFILES[hardware_profile]
                 
-                sigma_eff_sq, _ = self.calculate_effective_noise_variance_mc(
+                # FIX: Now expecting 3 return values
+                sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
                     snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
                     frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=50
                 )
                 
+                # Pass SNR_eff to BCRLB calculation
                 bcrlbs = self.calculate_observable_bcrlb_mc(
                     f_Hz, sigma_eff_sq, simulation.n_pilots,
                     g, B, profile.phase_noise_variance,
-                    antenna_diameter=antenna_diameter, n_mc=50
+                    antenna_diameter=antenna_diameter, n_mc=50,
+                    SNR_eff=SNR_eff  # Pass the calculated SNR_eff
                 )
                 
-                ranging_rmse_grid[i, j] = np.sqrt(bcrlbs['range']) * 1000
+                ranging_rmse_grid[i, j] = np.sqrt(bcrlbs['range']) * 1000  # mm
         
         # Data storage
         data_to_save = {
