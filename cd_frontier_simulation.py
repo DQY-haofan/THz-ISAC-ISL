@@ -148,52 +148,76 @@ class ISACSystem:
         return np.real(np.abs(sinr))
     
 
-    def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n_mc=100):
+    def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, 
+                                    K_total=1024, n_mc=100):
         """
-        Compute full C-D frontier with wider parameter ranges.
+        Compute full C-D frontier with effective spectral efficiency.
         
-        For systems in hardware-limited regime, we need larger variations to see trade-offs.
+        Key change: Account for pilot overhead in capacity calculation.
+        C_eff = (1 - M/K) * C_per_symbol
+        
+        Args:
+            system: ISACSystem instance
+            P_tx_scales: Power scaling factors
+            pilot_counts: List of pilot counts
+            K_total: Total symbols in frame (pilots + data)
+            n_mc: Monte Carlo samples
+            
+        Returns:
+            Arrays of (distortions, capacities) forming the Pareto frontier
         """
         if P_tx_scales is None:
-            # MUCH wider power range: -20dB to +10dB (100x variation)
-            P_tx_scales = np.logspace(-1.3, +1.0, 100)  # 0.05x to 10x
+            # VERY wide range to span from noise-limited to hardware-limited
+            P_tx_scales = np.logspace(-3, +1, 100)  # 0.001x to 10x (40dB range)
             
         if pilot_counts is None:
-            # More pilot options including very low counts
+            # Various pilot counts
             pilot_counts = [8, 16, 32, 64, 128, 256]
         
-        # Keep uniform distribution
+        # Filter valid pilot counts
+        pilot_counts = [M for M in pilot_counts if M < K_total]
+        
+        # Keep uniform distribution (standard QAM)
         p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
         
         all_points = []
         
         print(f"      Grid search: {len(P_tx_scales)} powers × {len(pilot_counts)} pilots")
+        print(f"      Frame size K={K_total} symbols")
         
         original_pilots = system.n_pilots
         
         for M in pilot_counts:
             system.n_pilots = M
             
+            # Calculate pilot overhead
+            alpha = M / K_total  # Pilot fraction
+            
             for P_scale in P_tx_scales:
                 try:
-                    # Calculate capacity
+                    # Calculate per-symbol capacity
                     I_vec = system.calculate_mutual_information(
                         p_uniform, P_tx_scale=P_scale, n_mc=n_mc
                     )
-                    capacity = float(np.mean(I_vec))
+                    C_per_symbol = float(np.mean(I_vec))
                     
-                    # Calculate distortion
+                    # CRITICAL: Apply pilot overhead penalty
+                    C_effective = (1.0 - alpha) * C_per_symbol
+                    
+                    # Calculate distortion (RMSE²)
                     distortion = system.calculate_distortion(
                         p_uniform, P_tx_scale=P_scale, n_mc=n_mc
                     )
                     
-                    # Keep all valid points (even if capacity is low)
-                    if distortion > 0 and distortion < 1e10 and capacity >= 0:
+                    # Store valid points
+                    if distortion > 0 and distortion < 1e10 and C_effective >= 0:
                         all_points.append({
                             'D': distortion,
-                            'C': capacity,
+                            'C': C_effective,  # Use effective capacity
+                            'C_per': C_per_symbol,  # Store original too
                             'P_scale': P_scale,
-                            'M': M
+                            'M': M,
+                            'alpha': alpha
                         })
                 except:
                     continue
@@ -209,24 +233,15 @@ class ISACSystem:
         # Sort by distortion
         all_points.sort(key=lambda x: x['D'])
         
-        # Extract Pareto frontier with relaxed criteria
+        # Extract Pareto frontier
         pareto_points = []
         max_capacity = -np.inf
         
-        # Include more points by using a tolerance
-        capacity_tolerance = 0.99  # Accept points within 1% of best capacity
-        
         for point in all_points:
-            if point['C'] >= max_capacity * capacity_tolerance:
+            # Include point if it improves capacity
+            if point['C'] > max_capacity:
                 pareto_points.append(point)
-                if point['C'] > max_capacity:
-                    max_capacity = point['C']
-        
-        # Ensure we have enough points by subsampling if needed
-        if len(pareto_points) > 100:
-            # Subsample to keep visualization manageable
-            indices = np.linspace(0, len(pareto_points)-1, 100, dtype=int)
-            pareto_points = [pareto_points[i] for i in indices]
+                max_capacity = point['C']
         
         if len(pareto_points) > 0:
             pareto_D = np.array([p['D'] for p in pareto_points])
@@ -234,12 +249,16 @@ class ISACSystem:
             
             print(f"      Pareto frontier: {len(pareto_points)} points")
             print(f"      D range: [{np.min(pareto_D):.2e}, {np.max(pareto_D):.2e}]")
-            print(f"      C range: [{np.min(pareto_C):.2f}, {np.max(pareto_C):.2f}] bits/symbol")
+            print(f"      C_eff range: [{np.min(pareto_C):.2f}, {np.max(pareto_C):.2f}] bits/symbol")
+            
+            # Show impact of pilot overhead
+            avg_alpha = np.mean([p['alpha'] for p in pareto_points])
+            print(f"      Average pilot overhead: {avg_alpha:.1%}")
             
             return pareto_D, pareto_C
         else:
             return np.array([]), np.array([])
-
+    
 
     def calculate_mutual_information(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
                                n_mc: int = 100) -> np.ndarray:
@@ -353,52 +372,77 @@ class ISACSystem:
 # =========================================================================
 
 
-def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n_mc=100):
+# 完全替换 compute_cd_frontier_grid_full 函数
+def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, 
+                                  K_total=1024, n_mc=100):
     """
-    Compute full C-D frontier with wider parameter ranges.
+    Compute full C-D frontier with effective spectral efficiency.
     
-    For systems in hardware-limited regime, we need larger variations to see trade-offs.
+    Key change: Account for pilot overhead in capacity calculation.
+    C_eff = (1 - M/K) * C_per_symbol
+    
+    Args:
+        system: ISACSystem instance
+        P_tx_scales: Power scaling factors
+        pilot_counts: List of pilot counts
+        K_total: Total symbols in frame (pilots + data)
+        n_mc: Monte Carlo samples
+        
+    Returns:
+        Arrays of (distortions, capacities) forming the Pareto frontier
     """
     if P_tx_scales is None:
-        # MUCH wider power range: -20dB to +10dB (100x variation)
-        P_tx_scales = np.logspace(-1.3, +1.0, 100)  # 0.05x to 10x
+        # VERY wide range to span from noise-limited to hardware-limited
+        P_tx_scales = np.logspace(-3, +1, 100)  # 0.001x to 10x (40dB range)
         
     if pilot_counts is None:
-        # More pilot options including very low counts
+        # Various pilot counts
         pilot_counts = [8, 16, 32, 64, 128, 256]
     
-    # Keep uniform distribution
+    # Filter valid pilot counts
+    pilot_counts = [M for M in pilot_counts if M < K_total]
+    
+    # Keep uniform distribution (standard QAM)
     p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
     
     all_points = []
     
     print(f"      Grid search: {len(P_tx_scales)} powers × {len(pilot_counts)} pilots")
+    print(f"      Frame size K={K_total} symbols")
     
     original_pilots = system.n_pilots
     
     for M in pilot_counts:
         system.n_pilots = M
         
+        # Calculate pilot overhead
+        alpha = M / K_total  # Pilot fraction
+        
         for P_scale in P_tx_scales:
             try:
-                # Calculate capacity
+                # Calculate per-symbol capacity
                 I_vec = system.calculate_mutual_information(
                     p_uniform, P_tx_scale=P_scale, n_mc=n_mc
                 )
-                capacity = float(np.mean(I_vec))
+                C_per_symbol = float(np.mean(I_vec))
                 
-                # Calculate distortion
+                # CRITICAL: Apply pilot overhead penalty
+                C_effective = (1.0 - alpha) * C_per_symbol
+                
+                # Calculate distortion (RMSE²)
                 distortion = system.calculate_distortion(
                     p_uniform, P_tx_scale=P_scale, n_mc=n_mc
                 )
                 
-                # Keep all valid points (even if capacity is low)
-                if distortion > 0 and distortion < 1e10 and capacity >= 0:
+                # Store valid points
+                if distortion > 0 and distortion < 1e10 and C_effective >= 0:
                     all_points.append({
                         'D': distortion,
-                        'C': capacity,
+                        'C': C_effective,  # Use effective capacity
+                        'C_per': C_per_symbol,  # Store original too
                         'P_scale': P_scale,
-                        'M': M
+                        'M': M,
+                        'alpha': alpha
                     })
             except:
                 continue
@@ -414,24 +458,15 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n
     # Sort by distortion
     all_points.sort(key=lambda x: x['D'])
     
-    # Extract Pareto frontier with relaxed criteria
+    # Extract Pareto frontier
     pareto_points = []
     max_capacity = -np.inf
     
-    # Include more points by using a tolerance
-    capacity_tolerance = 0.99  # Accept points within 1% of best capacity
-    
     for point in all_points:
-        if point['C'] >= max_capacity * capacity_tolerance:
+        # Include point if it improves capacity
+        if point['C'] > max_capacity:
             pareto_points.append(point)
-            if point['C'] > max_capacity:
-                max_capacity = point['C']
-    
-    # Ensure we have enough points by subsampling if needed
-    if len(pareto_points) > 100:
-        # Subsample to keep visualization manageable
-        indices = np.linspace(0, len(pareto_points)-1, 100, dtype=int)
-        pareto_points = [pareto_points[i] for i in indices]
+            max_capacity = point['C']
     
     if len(pareto_points) > 0:
         pareto_D = np.array([p['D'] for p in pareto_points])
@@ -439,25 +474,30 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, n
         
         print(f"      Pareto frontier: {len(pareto_points)} points")
         print(f"      D range: [{np.min(pareto_D):.2e}, {np.max(pareto_D):.2e}]")
-        print(f"      C range: [{np.min(pareto_C):.2f}, {np.max(pareto_C):.2f}] bits/symbol")
+        print(f"      C_eff range: [{np.min(pareto_C):.2f}, {np.max(pareto_C):.2f}] bits/symbol")
+        
+        # Show impact of pilot overhead
+        avg_alpha = np.mean([p['alpha'] for p in pareto_points])
+        print(f"      Average pilot overhead: {avg_alpha:.1%}")
         
         return pareto_D, pareto_C
     else:
         return np.array([]), np.array([])
-      
-# 完全替换 plot_cd_frontier_all_profiles 函数
+
+
+# 替换 plot_cd_frontier_all_profiles 函数
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
-    """Plot C-D frontier for all hardware profiles with complete curves."""
+    """Plot C-D frontier with effective spectral efficiency."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
     
     profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
     
-    # Data storage
     data_to_save = {
         'hardware_profiles': profiles_to_plot,
-        'description': 'C-D frontiers from power and pilot scaling'
+        'description': 'C-D frontiers with pilot overhead penalty',
+        'frame_size': 1024
     }
     
     for idx, profile_name in enumerate(profiles_to_plot):
@@ -466,115 +506,105 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
             
         print(f"  Processing {profile_name}...")
         
-        # Create system
+        # Adjust system parameters to span both regimes
         system = ISACSystem(
             hardware_profile=profile_name,
             f_c=300e9,
-            distance=scenario.R_default,
-            n_pilots=64,  # Default, will be varied
-            antenna_diameter=scenario.default_antenna_diameter,
-            tx_power_dBm=scenario.default_tx_power_dBm
+            distance=2500e3,  # 2500 km - moderate distance
+            n_pilots=64,
+            antenna_diameter=1.0,  # 1m - moderate size
+            tx_power_dBm=28  # 28 dBm - moderate power
         )
         
-        # Generate complete C-D frontier
-        # CRITICAL: Use appropriate power range and pilot counts
+        # Generate frontier with effective capacity
         distortions, capacities = compute_cd_frontier_grid_full(
             system,
-            P_tx_scales=np.logspace(-0.5, +0.5, 40),  # ±3dB around nominal
-            pilot_counts=[16, 32, 64, 128],  # Practical pilot counts
+            P_tx_scales=np.logspace(-2.5, +1, 120),  # Wide range: -25dB to +10dB
+            pilot_counts=[8, 16, 32, 64, 128, 256, 512],  # More pilot options
+            K_total=1024,  # Frame size
             n_mc=50
         )
         
         if distortions.size > 0:
-            # Convert to RMSE in mm
             ranging_rmse_mm = np.sqrt(distortions) * 1000.0
             
             # Store data
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
+            data_to_save[f'capacity_eff_{profile_name}'] = capacities.tolist()
             data_to_save[f'num_points_{profile_name}'] = len(capacities)
             
-            # Plot frontier curve
+            # Plot complete frontier curve
             ax.plot(ranging_rmse_mm, capacities,
                    color=colors[idx], 
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    linestyle='-',
+                   alpha=0.9,
                    label=f'{profile_name.replace("_", " ")}',
                    zorder=5)
             
             # Add markers for visibility
-            if len(ranging_rmse_mm) > 1:
-                # Select evenly spaced points for markers
-                n_markers = min(8, len(ranging_rmse_mm))
-                marker_indices = np.linspace(0, len(ranging_rmse_mm)-1, n_markers, dtype=int)
+            if len(ranging_rmse_mm) > 5:
+                # Logarithmically spaced markers
+                log_rmse = np.log10(ranging_rmse_mm)
+                marker_log = np.linspace(log_rmse.min(), log_rmse.max(), 
+                                        min(12, len(ranging_rmse_mm)))
+                marker_indices = []
+                for ml in marker_log:
+                    idx = np.argmin(np.abs(log_rmse - ml))
+                    if idx not in marker_indices:
+                        marker_indices.append(idx)
                 
                 ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
                        color=colors[idx],
                        linestyle='None',
                        marker=markers[idx], 
-                       markersize=IEEEStyle.LINE_PROPS['markersize'],
+                       markersize=IEEEStyle.LINE_PROPS['markersize']-1,
                        markerfacecolor='white', 
                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                        zorder=6)
             
-            # Calculate and mark nominal operating point
-            p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
-            system.n_pilots = 64  # Reset to default
-            
-            I_nominal = system.calculate_mutual_information(p_uniform, P_tx_scale=1.0, n_mc=50)
-            C_nominal = np.mean(I_nominal)
-            D_nominal = system.calculate_distortion(p_uniform, P_tx_scale=1.0, n_mc=50)
-            rmse_nominal = np.sqrt(D_nominal) * 1000
-            
-            # Mark nominal point with filled marker
-            ax.plot(rmse_nominal, C_nominal, 
-                   color=colors[idx],
-                   marker=markers[idx],
-                   markersize=IEEEStyle.LINE_PROPS['markersize']*1.5,
-                   markerfacecolor=colors[idx],
-                   markeredgewidth=2,
-                   markeredgecolor='white',
-                   zorder=10)
-            
             print(f"    {profile_name}: {len(capacities)} frontier points")
-            print(f"      Nominal: C={C_nominal:.2f} bits/sym, RMSE={rmse_nominal:.3f} mm")
     
-    # Set axis properties BEFORE drawing regions
+    # Set axis properties
     ax.set_xscale('log')
     ax.set_xlim(1e-3, 100)  # 1 µm to 100 mm
-    ax.set_ylim(0, 10)
+    ax.set_ylim(0, 8)
     
     # Add feasibility regions
-    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
-    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
+    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.05, color='green')
+    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.05, color='blue')
     
     # Add threshold lines
     ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
     ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
     
-    # Add annotations
-    ax.text(2e-2, 2.1, 'Good communication (2 bits/symbol)', 
+    # Annotations
+    ax.text(5e-2, 2.1, 'Communication threshold', 
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
-    ax.text(0.8, 8, 'Sub-mm\nsensing', ha='right', va='top',
+    ax.text(0.8, 6, 'Sub-mm', ha='right',
            fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
     
-    # Add legend note
-    ax.text(0.02, 9, 'Lines: Pareto frontier (power & pilot trade-off)\n' + 
-                     'Filled markers: Nominal operating points',
-           fontsize=IEEEStyle.FONT_SIZES['annotation']-1,
+    # Add explanation of effective capacity
+    ax.text(0.98, 0.02, 
+           r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
+           'Frame: K=1024 symbols\n' +
+           'Power: -25dB to +10dB\n' +
+           'Pilots: 8 to 512',
+           transform=ax.transAxes,
+           fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
+           ha='right', va='bottom',
            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
                     edgecolor='gray', alpha=0.9))
     
-    # Labels and title
+    # Labels
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Communication Capacity (bits/symbol)', 
+    ax.set_ylabel('Effective Spectral Efficiency (bits/symbol)', 
                  fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('C-D Trade-off: Power and Pilot Allocation',
+    ax.set_title('C-D Trade-off with Pilot Overhead',
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     
-    # Grid and legend
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
+    ax.legend(loc='lower left', fontsize=IEEEStyle.FONT_SIZES['legend'],
              frameon=True, edgecolor='black', framealpha=0.9)
     
     plt.tight_layout()
@@ -582,12 +612,12 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Save data
     data_saver.save_data(save_name, data_to_save,
-                       "C-D frontier for all hardware profiles (power & pilot trade-off)")
+                       "C-D frontier with effective spectral efficiency")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
 
+    
 # 替换 plot_cd_frontier_pointing_sensitivity 函数
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):
     """Plot C-D frontier sensitivity to pointing error with enhanced visibility."""

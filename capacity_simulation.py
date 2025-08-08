@@ -334,7 +334,64 @@ def generate_cd_frontier(system, P_tx_scales=None, n_mc=50):
     
     return np.array(pareto_D), np.array(pareto_C)
 
-# 替换 plot_cd_frontier 函数
+
+
+# 文件: capacity_simulation.py
+# 在plot_cd_frontier函数前添加辅助函数
+
+def generate_cd_frontier_with_overhead(system, K_total=1024, n_points=50):
+    """Generate C-D frontier with pilot overhead penalty."""
+    
+    # Power and pilot configurations
+    P_tx_scales = np.logspace(-2, +1, n_points)
+    pilot_counts = [8, 16, 32, 64, 128, 256]
+    pilot_counts = [M for M in pilot_counts if M < K_total]
+    
+    p_uniform = np.ones(len(system.constellation)) / len(system.constellation)
+    
+    all_points = []
+    original_pilots = system.n_pilots
+    
+    for M in pilot_counts:
+        system.n_pilots = M
+        alpha = M / K_total  # Pilot overhead
+        
+        for P_scale in P_tx_scales:
+            try:
+                # Per-symbol capacity
+                I_x = system.calculate_mutual_information(p_uniform, P_tx_scale=P_scale, n_mc=50)
+                C_per = np.mean(I_x)
+                
+                # Effective capacity with overhead
+                C_eff = (1.0 - alpha) * C_per
+                
+                # Distortion
+                distortion = system.calculate_distortion(p_uniform, P_tx_scale=P_scale, n_mc=50)
+                
+                if 0 < distortion < 1e10 and C_eff > 0:
+                    all_points.append((distortion, C_eff))
+            except:
+                continue
+    
+    system.n_pilots = original_pilots
+    
+    if len(all_points) == 0:
+        return np.array([]), np.array([])
+    
+    # Extract Pareto frontier
+    all_points.sort(key=lambda x: x[0])
+    pareto_D = []
+    pareto_C = []
+    max_C = -np.inf
+    
+    for D, C in all_points:
+        if C > max_C:
+            pareto_D.append(D)
+            pareto_C.append(C)
+            max_C = C
+    
+    return np.array(pareto_D), np.array(pareto_C)
+
 def plot_cd_frontier(save_name='fig_cd_frontier'):
     """Plot C-D frontier for all hardware profiles with complete curves."""
     print(f"\n=== Generating {save_name} ===")
