@@ -659,116 +659,125 @@ class EnhancedCRLBAnalyzer:
         
         print(f"Saved: results/{save_name}.pdf/png and data")
     
-    # 修复 plot_3d_performance_landscape 方法（相关部分）
     def plot_3d_performance_landscape(self, save_name='fig_3d_performance_landscape'):
-        """Plot 3D performance landscape with multiple viewing angles."""
+        """Generate 3D performance landscape with proper labels."""
         print(f"\n=== Generating {save_name} ===")
         
-        # Parameter ranges
-        frequencies_GHz = np.linspace(100, 1000, 15)
-        distances_km = np.linspace(500, 5000, 15)
-        
-        # Create meshgrid
+        # Generate grid data
+        frequencies_GHz = np.linspace(100, 1000, 30)
+        distances_km = np.linspace(500, 5000, 30)
         F, D = np.meshgrid(frequencies_GHz, distances_km)
         
-        # Fixed parameters
-        hardware_profile = "High_Performance"
-        snr_dB = simulation.default_SNR_dB
-        antenna_diameter = scenario.default_antenna_diameter
-        tx_power_dBm = scenario.default_tx_power_dBm
+        # Calculate capacity for each point
+        capacity_grid = np.zeros_like(F)
         
-        # Calculate ranging RMSE for each point
-        ranging_rmse_grid = np.zeros_like(F)
-        
-        print("  Computing 3D landscape...")
-        for i in tqdm(range(F.shape[0]), desc="    Distance levels"):
+        for i in range(F.shape[0]):
             for j in range(F.shape[1]):
-                f_Hz = F[i, j] * 1e9
-                d_m = D[i, j] * 1e3
+                freq_Hz = F[i, j] * 1e9
+                dist_m = D[i, j] * 1e3
                 
-                snr_linear = 10**(snr_dB/10)
-                g = self.calculate_channel_gain(d_m, f_Hz, antenna_diameter)
-                B = self.calculate_bussgang_gain()
-                profile = HARDWARE_PROFILES[hardware_profile]
+                # Create system and calculate capacity
+                self.f_c = freq_Hz
+                self.distance = dist_m
+                self.lambda_c = PhysicalConstants.c / freq_Hz
+                self._calculate_enhanced_link_budget()
                 
-                # FIX: Now expecting 3 return values
-                sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
-                    snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
-                    frequency_Hz=f_Hz, antenna_diameter=antenna_diameter, n_mc=50
-                )
-                
-                # Pass SNR_eff to BCRLB calculation
-                bcrlbs = self.calculate_observable_bcrlb_mc(
-                    f_Hz, sigma_eff_sq, simulation.n_pilots,
-                    g, B, profile.phase_noise_variance,
-                    antenna_diameter=antenna_diameter, n_mc=50,
-                    SNR_eff=SNR_eff  # Pass the calculated SNR_eff
-                )
-                
-                ranging_rmse_grid[i, j] = np.sqrt(bcrlbs['range']) * 1000  # mm
+                # Calculate capacity
+                p_x = np.ones(len(self.constellation)) / len(self.constellation)
+                I_x = self.calculate_mutual_information(p_x, P_tx_scale=1.0, n_mc=30)
+                capacity_grid[i, j] = np.mean(I_x)
         
-        # Data storage
+        # Create single optimized view
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Surface plot
+        surf = ax.plot_surface(F, D, capacity_grid, 
+                            cmap='viridis', 
+                            edgecolor='none', 
+                            alpha=0.9,
+                            antialiased=True)
+        
+        # Add contour lines at the bottom (without red line)
+        contours = ax.contour(F, D, capacity_grid, 
+                            zdir='z', 
+                            offset=np.min(capacity_grid) - 0.5,
+                            cmap='viridis', 
+                            alpha=0.5,
+                            linewidths=1.0)
+        
+        # CRITICAL: Set all axis labels with proper spacing
+        ax.set_xlabel('Frequency (GHz)', 
+                    fontsize=IEEEStyle.FONT_SIZES['label'], 
+                    labelpad=10)
+        ax.set_ylabel('Distance (km)', 
+                    fontsize=IEEEStyle.FONT_SIZES['label'], 
+                    labelpad=10)
+        ax.set_zlabel('Capacity (bits/symbol)', 
+                    fontsize=IEEEStyle.FONT_SIZES['label'], 
+                    labelpad=15)  # Extra padding for Z-label
+        
+        # Set title with proper spacing
+        ax.set_title('THz ISL ISAC Capacity Landscape\n(High Performance Hardware)', 
+                    fontsize=IEEEStyle.FONT_SIZES['title'], 
+                    pad=20)
+        
+        # Optimize viewing angle for best visibility
+        ax.view_init(elev=25, azim=45)
+        
+        # Adjust axis properties
+        ax.set_xlim(100, 1000)
+        ax.set_ylim(500, 5000)
+        ax.set_zlim(np.min(capacity_grid) - 0.5, np.max(capacity_grid) + 0.5)
+        
+        # Format tick labels
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x)}'))
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x)}'))
+        ax.zaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}'))
+        
+        # Adjust tick label size
+        ax.tick_params(axis='both', which='major', 
+                    labelsize=IEEEStyle.FONT_SIZES['tick'])
+        ax.tick_params(axis='z', which='major', 
+                    labelsize=IEEEStyle.FONT_SIZES['tick'])
+        
+        # Add colorbar with proper label
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10, pad=0.1)
+        cbar.set_label('Capacity (bits/symbol)', 
+                    fontsize=IEEEStyle.FONT_SIZES['label'],
+                    rotation=270, 
+                    labelpad=20)
+        cbar.ax.tick_params(labelsize=IEEEStyle.FONT_SIZES['tick'])
+        
+        # Set background color
+        ax.xaxis.pane.fill = False
+        ax.yaxis.pane.fill = False
+        ax.zaxis.pane.fill = False
+        ax.grid(True, alpha=0.3)
+        
+        # Ensure Z-label is visible by adjusting distance
+        ax.dist = 11  # Default is 10, increase for better label visibility
+        
+        # Save figure
+        plt.tight_layout()
+        plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Save data
         data_to_save = {
             'frequency_GHz': frequencies_GHz.tolist(),
             'distance_km': distances_km.tolist(),
-            'ranging_rmse_mm': ranging_rmse_grid.tolist(),
-            'hardware_profile': hardware_profile,
-            'snr_dB': snr_dB
+            'capacity_grid': capacity_grid.tolist(),
+            'hardware_profile': 'High_Performance'
         }
         
-        # Create multiple views
-        viewing_angles = [
-            (25, 45, 'default'),
-            (15, 60, 'frequency_emphasis'),
-            (30, 15, 'distance_emphasis'),
-            (45, 45, 'isometric')
-        ]
-        
-        for elev, azim, view_name in viewing_angles:
-            fig = plt.figure(figsize=IEEEStyle.FIG_SIZES['3d'])
-            ax = fig.add_subplot(111, projection='3d')
-            
-            # Surface plot with log scale
-            surf = ax.plot_surface(F, D, np.log10(ranging_rmse_grid), 
-                                  cmap='viridis', 
-                                  edgecolor='none', alpha=0.8)
-            
-            # Add contour lines at the bottom
-            contours = ax.contour(F, D, np.log10(ranging_rmse_grid), 
-                                 zdir='z', offset=np.log10(ranging_rmse_grid).min() - 0.5, 
-                                 cmap='viridis', alpha=0.5)
-            
-            # Labels and formatting
-            ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
-            ax.set_ylabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
-            ax.set_zlabel('log10(Ranging RMSE [mm])', fontsize=IEEEStyle.FONT_SIZES['label'])
-            ax.set_title(f'THz ISL Ranging Performance Landscape\n' +
-                        f'({hardware_profile}, SNR = {snr_dB} dB)', 
-                        fontsize=IEEEStyle.FONT_SIZES['title'], pad=20)
-            
-            # Add colorbar
-            fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, 
-                        label='log10(RMSE [mm])')
-            
-            # Set viewing angle
-            ax.view_init(elev=elev, azim=azim)
-            
-            # Highlight 1THz
-            ax.plot([1000, 1000], [distances_km[0], distances_km[-1]], 
-                   [ax.get_zlim()[0], ax.get_zlim()[0]], 
-                   'r--', linewidth=2, alpha=0.7)
-            
-            plt.tight_layout()
-            plt.savefig(f'results/{save_name}_{view_name}.pdf', 
-                       format='pdf', dpi=300, bbox_inches='tight')
-            plt.savefig(f'results/{save_name}_{view_name}.png', 
-                       format='png', dpi=300, bbox_inches='tight')
-            plt.close()
-        
         data_saver.save_data(save_name, data_to_save,
-                           "3D performance landscape data")
+                        "3D capacity landscape for High Performance hardware")
         
-        print(f"Saved: results/{save_name}_[views].pdf/png and data")
+        print(f"Saved: results/{save_name}.pdf/png and data")
+
+
 
 def main():
     """Main function to generate all CRLB analysis plots."""
