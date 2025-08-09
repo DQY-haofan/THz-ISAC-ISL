@@ -390,8 +390,6 @@ def generate_cd_frontier_with_overhead(system, K_total=1024, P_tx_scales=None, n
     return np.array(pareto_D), np.array(pareto_C)
 
 
-# 文件: capacity_simulation.py
-# 替换 plot_cd_frontier 函数
 
 def plot_cd_frontier(save_name='fig_cd_frontier'):
     """Plot C-D frontier for all hardware profiles with pilot overhead."""
@@ -465,29 +463,28 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     
     # Adjust x-axis range
     ax.set_xscale('log')
-    ax.set_xlim(1e-4, 100)
-    ax.set_ylim(0, 10)
-    
-    # Add feasibility regions
-    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.1, color='green')
-    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.1, color='blue')
-    
-    # Add performance thresholds
-    ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(1e-2, 2.1, 'Good communication', 
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
-    
-    ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(0.8, ax.get_ylim()[1]*0.7, 'Sub-mm\nsensing', ha='right',
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
-    
+    ax.set_xlim(1e-4, 1e-1)  # Focus on the interesting range
+    ax.set_ylim(1, 7)  # Adjusted to show curves better
+
     # Labels
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Effective Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_title('Capacity-Distortion Trade-off with Pilot Overhead', 
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.legend(loc='lower left', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    
+    # Adjust text position for frame/power info
+    ax.text(0.98, 0.98,  # Moved to top-right
+           r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
+           'Frame: K=1024 symbols\n' +
+           'Power: -25dB to +10dB\n' +
+           'Pilots: 8 to 512',
+           transform=ax.transAxes,
+           fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
+           ha='right', va='top',  # Changed alignment
+           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                    edgecolor='gray', alpha=0.9))
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -590,8 +587,8 @@ def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     ax.set_title('Capacity vs. SNR with Hardware Limitations',
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='lower right', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    ax.set_ylim(0, 10)
+    ax.legend(loc='upper left', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.set_ylim(0, 12)
     ax.set_xlim(-10, 60)
     
     plt.tight_layout()
@@ -652,10 +649,6 @@ def plot_capacity_vs_frequency(save_name='fig_capacity_vs_frequency'):
                 markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                 label=f'{d_km} km')
     
-    # Highlight 1THz
-    ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.text(1000, ax.get_ylim()[1]*0.95, '1 THz', 
-           ha='center', fontsize=IEEEStyle.FONT_SIZES['annotation'], color='red')
     
     ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
@@ -909,13 +902,14 @@ def plot_3d_capacity_landscape(save_name='fig_3d_capacity_landscape'):
         contours = ax.contour(F, D, capacity_grid, zdir='z', offset=0, 
                               cmap='viridis', alpha=0.5)
         
-        # Labels and formatting
-        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax.set_ylabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax.set_zlabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
+        # FIX: Ensure z-label is visible
+        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'], labelpad=10)
+        ax.set_ylabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'], labelpad=10)
+        ax.set_zlabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'], labelpad=10)
         ax.set_title('THz ISL ISAC Capacity Landscape\n(High Performance Hardware)', 
                     fontsize=IEEEStyle.FONT_SIZES['title'], pad=20)
         
+        ax.dist = 11  # Default is 10
         # Add colorbar
         fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
         

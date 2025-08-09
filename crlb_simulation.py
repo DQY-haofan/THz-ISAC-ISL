@@ -250,7 +250,7 @@ class EnhancedCRLBAnalyzer:
         
         # Axis limits with padding
         ax.set_xlim(-10, 60)
-        ax.set_ylim(1e-3, 1e4)
+        ax.set_ylim(1e-3, 1e3)
         
         # Tight layout
         plt.tight_layout()
@@ -336,11 +336,7 @@ class EnhancedCRLBAnalyzer:
                 linewidth=IEEEStyle.LINE_PROPS['linewidth']-0.5,
                 label='$f^{-2}$ scaling')
         
-        # Highlight 1THz
-        ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
-        ax.text(1000, ax.get_ylim()[0]*2, '1 THz', 
-            ha='center', fontsize=IEEEStyle.FONT_SIZES['annotation'], color='red')
-        
+
         # Performance threshold
         ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
         
@@ -426,9 +422,7 @@ class EnhancedCRLBAnalyzer:
                 markerfacecolor='white',
                 markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
         
-        # Highlight 1THz
-        ax.axvline(x=1000, color='red', linestyle=':', alpha=0.5, linewidth=1.5)
-        
+
         # Labels
         ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
         ax.set_ylabel('Velocity RMSE (m/s)', fontsize=IEEEStyle.FONT_SIZES['label'])
@@ -693,14 +687,6 @@ class EnhancedCRLBAnalyzer:
         # Add grid
         ax.grid(True, alpha=0.3)
         
-        # Mark recommended region
-        from matplotlib.patches import Rectangle
-        rect = Rectangle((1.3, 30), 0.4, 3, fill=False, 
-                        edgecolor='white', linewidth=2, linestyle='--')
-        ax.add_patch(rect)
-        ax.text(1.5, 31.5, 'Recommended', ha='center', color='white',
-               fontsize=IEEEStyle.FONT_SIZES['annotation'], 
-               bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
         
         plt.tight_layout()
         plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')

@@ -485,9 +485,6 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
         return np.array([]), np.array([])
 
 
-# 文件: cd_frontier_simulation.py
-# 替换 plot_cd_frontier_all_profiles 函数
-
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     """Plot C-D frontier with effective spectral efficiency."""
     print(f"\n=== Generating {save_name} ===")
@@ -573,32 +570,32 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     
     # Set axis properties
     ax.set_xscale('log')
-    ax.set_xlim(1e-3, 100)  # 1 µm to 100 mm
-    ax.set_ylim(0, 8)
+    ax.set_xlim(1e-4, 1e-1)  # 1 µm to 100 mm
+    ax.set_ylim(1, 7)
     
-    # Add feasibility regions
-    ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.05, color='green')
-    ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.05, color='blue')
+    # # Add feasibility regions
+    # ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.05, color='green')
+    # ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.05, color='blue')
     
-    # Add threshold lines
-    ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
+    # # Add threshold lines
+    # ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
+    # ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
     
-    # Annotations
-    ax.text(5e-2, 2.1, 'Communication threshold', 
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
-    ax.text(0.8, 6, 'Sub-mm', ha='right',
-           fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
+    # # Annotations
+    # ax.text(5e-2, 2.1, 'Communication threshold', 
+    #        fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
+    # ax.text(0.8, 6, 'Sub-mm', ha='right',
+    #        fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
     
     # Add explanation of effective capacity
-    ax.text(0.98, 0.02, 
+    ax.text(0.98, 0.98, 
            r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
            'Frame: K=1024 symbols\n' +
            'Power: -25dB to +10dB\n' +
            'Pilots: 8 to 512',
            transform=ax.transAxes,
            fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
-           ha='right', va='bottom',
+           ha='right', va='top',
            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
                     edgecolor='gray', alpha=0.9))
     
@@ -625,7 +622,6 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
 
     
 
-# 替换 plot_cd_frontier_pointing_sensitivity 函数
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):
     """Plot C-D frontier sensitivity to pointing error with enhanced visibility."""
     print(f"\n=== Generating {save_name} ===")
@@ -885,9 +881,6 @@ def plot_gamma_eff_sensitivity(save_name='fig_gamma_eff_sensitivity'):
               'r-', linewidth=3, marker='s', markersize=8)
     ax2.axvline(x=0.01, color='r', linestyle='--', alpha=0.5, label='High Performance')
     ax2.axvline(x=0.025, color='g', linestyle='--', alpha=0.5, label='SWaP Efficient')
-    ax2.axhline(y=1.0, color='gray', linestyle=':', alpha=0.5)
-    ax2.text(1e-2, 1.2, 'Sub-mm threshold', 
-            fontsize=IEEEStyle.FONT_SIZES['annotation'], ha='center')
     ax2.set_xlabel('Hardware Quality Factor Γ_eff', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax2.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax2.set_title(f'Sensing Performance\n(SNR = {snr_dB} dB)', 
