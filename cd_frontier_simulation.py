@@ -486,7 +486,7 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
 
 
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
-    """Plot C-D frontier with effective spectral efficiency."""
+    """Plot C-D frontier with effective spectral efficiency and auto-scaled axes."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
@@ -499,105 +499,90 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
         'frame_size': 1024
     }
     
-    # CRITICAL FIX: Use profile_idx instead of idx to avoid conflict
+    # Track data ranges for auto-scaling
+    all_rmse = []
+    all_capacity = []
+    
     for profile_idx, profile_name in enumerate(profiles_to_plot):
         if profile_name not in HARDWARE_PROFILES:
             continue
             
         print(f"  Processing {profile_name}...")
         
-        # Adjust system parameters to span both regimes
         system = ISACSystem(
             hardware_profile=profile_name,
             f_c=300e9,
-            distance=2500e3,  # 2500 km - moderate distance
+            distance=2500e3,
             n_pilots=64,
-            antenna_diameter=1.0,  # 1m - moderate size
-            tx_power_dBm=28  # 28 dBm - moderate power
+            antenna_diameter=1.0,
+            tx_power_dBm=28
         )
         
-        # Generate frontier with effective capacity
         distortions, capacities = compute_cd_frontier_grid_full(
             system,
-            P_tx_scales=np.logspace(-2.5, +1, 120),  # Wide range: -25dB to +10dB
-            pilot_counts=[8, 16, 32, 64, 128, 256, 512],  # More pilot options
-            K_total=1024,  # Frame size
+            P_tx_scales=np.logspace(-2.5, +1, 120),
+            pilot_counts=[8, 16, 32, 64, 128, 256, 512],
+            K_total=1024,
             n_mc=50
         )
         
         if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000.0
             
-            # Store data
+            # Track ranges
+            all_rmse.extend(ranging_rmse_mm)
+            all_capacity.extend(capacities)
+            
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
             data_to_save[f'capacity_eff_{profile_name}'] = capacities.tolist()
             data_to_save[f'num_points_{profile_name}'] = len(capacities)
             
-            # Plot complete frontier curve - USE profile_idx HERE
             ax.plot(ranging_rmse_mm, capacities,
-                   color=colors[profile_idx],  # FIX: Use profile_idx
+                   color=colors[profile_idx],
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    linestyle='-',
                    alpha=0.9,
                    label=f'{profile_name.replace("_", " ")}',
                    zorder=5)
             
-            # Add markers for visibility
             if len(ranging_rmse_mm) > 5:
-                # Logarithmically spaced markers
                 log_rmse = np.log10(ranging_rmse_mm)
                 marker_log = np.linspace(log_rmse.min(), log_rmse.max(), 
-                                        min(12, len(ranging_rmse_mm)))
+                                        min(8, len(ranging_rmse_mm)))
                 marker_indices = []
                 for ml in marker_log:
                     idx = np.argmin(np.abs(log_rmse - ml))
                     if idx not in marker_indices:
                         marker_indices.append(idx)
                 
-                # FIX: Use profile_idx for colors and markers
                 ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
-                       color=colors[profile_idx],  # FIX: Use profile_idx
+                       color=colors[profile_idx],
                        linestyle='None',
-                       marker=markers[profile_idx],  # FIX: Use profile_idx
+                       marker=markers[profile_idx],
                        markersize=IEEEStyle.LINE_PROPS['markersize']-1,
                        markerfacecolor='white', 
                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                        zorder=6)
             
             print(f"    {profile_name}: {len(capacities)} frontier points")
-            print(f"      RMSE range: [{np.min(ranging_rmse_mm):.3e}, {np.max(ranging_rmse_mm):.3e}] mm")
-            print(f"      Capacity range: [{np.min(capacities):.2f}, {np.max(capacities):.2f}] bits/symbol")
     
-    # Set axis properties
+    # AUTO-SCALE axes based on actual data with margins
+    if all_rmse and all_capacity:
+        # X-axis (log scale): add 20% margin on each side in log space
+        rmse_min, rmse_max = min(all_rmse), max(all_rmse)
+        log_range = np.log10(rmse_max) - np.log10(rmse_min)
+        x_min = 10**(np.log10(rmse_min) - 0.1 * log_range)
+        x_max = 10**(np.log10(rmse_max) + 0.3 * log_range)  # More margin on right for legend
+        ax.set_xlim(x_min, x_max)
+        
+        # Y-axis: add 10% margin
+        c_min, c_max = min(all_capacity), max(all_capacity)
+        c_range = c_max - c_min
+        y_min = max(0, c_min - 0.1 * c_range)
+        y_max = c_max + 0.2 * c_range  # More margin on top for legend
+        ax.set_ylim(y_min, y_max)
+    
     ax.set_xscale('log')
-    ax.set_xlim(1e-4, 1e-1)  # 1 µm to 100 mm
-    ax.set_ylim(1, 7)
-    
-    # # Add feasibility regions
-    # ax.axhspan(2.0, ax.get_ylim()[1], alpha=0.05, color='green')
-    # ax.axvspan(ax.get_xlim()[0], 1.0, alpha=0.05, color='blue')
-    
-    # # Add threshold lines
-    # ax.axhline(y=2.0, color='green', linestyle=':', alpha=0.5, linewidth=1.5)
-    # ax.axvline(x=1.0, color='blue', linestyle=':', alpha=0.5, linewidth=1.5)
-    
-    # # Annotations
-    # ax.text(5e-2, 2.1, 'Communication threshold', 
-    #        fontsize=IEEEStyle.FONT_SIZES['annotation'], color='green')
-    # ax.text(0.8, 6, 'Sub-mm', ha='right',
-    #        fontsize=IEEEStyle.FONT_SIZES['annotation'], color='blue')
-    
-    # Add explanation of effective capacity
-    ax.text(0.98, 0.98, 
-           r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
-           'Frame: K=1024 symbols\n' +
-           'Power: -25dB to +10dB\n' +
-           'Pilots: 8 to 512',
-           transform=ax.transAxes,
-           fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
-           ha='right', va='top',
-           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
-                    edgecolor='gray', alpha=0.9))
     
     # Labels
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
@@ -607,8 +592,29 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='lower left', fontsize=IEEEStyle.FONT_SIZES['legend'],
+    ax.legend(loc='best', fontsize=IEEEStyle.FONT_SIZES['legend'],
              frameon=True, edgecolor='black', framealpha=0.9)
+    
+    # Add info box in available space
+    info_text = (r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
+                'Frame: K=1024, Power: ±15dB, Pilots: 8-512')
+    
+    # Find best position for text box (avoid data)
+    if all_capacity:
+        avg_c = np.mean(all_capacity)
+        if avg_c > (y_max + y_min) / 2:  # Data in upper half
+            text_y = 0.15  # Put text at bottom
+        else:
+            text_y = 0.85  # Put text at top
+    else:
+        text_y = 0.15
+    
+    ax.text(0.98, text_y, info_text,
+           transform=ax.transAxes,
+           fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
+           ha='right', va='top' if text_y > 0.5 else 'bottom',
+           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                    edgecolor='gray', alpha=0.9))
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -619,7 +625,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                        "C-D frontier with effective spectral efficiency")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-
+    
     
 
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):

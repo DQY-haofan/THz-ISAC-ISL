@@ -141,131 +141,92 @@ class EnhancedCRLBAnalyzer:
     # INDIVIDUAL PLOT FUNCTIONS
     # =========================================================================
     
+ # 文件: crlb_simulation.py
+# 修改 plot_ranging_crlb_vs_snr 函数
+
     def plot_ranging_crlb_vs_snr(self, save_name='fig_ranging_crlb_vs_snr'):
-        """Plot ranging CRLB vs SNR for all hardware profiles - IEEE style."""
+        """Plot ranging CRLB vs SNR with auto-scaled axes."""
         print(f"\n=== Generating {save_name} ===")
         
         fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
         
-        # Parameters
+        snr_dB = np.linspace(-10, 60, 71)
         frequency_Hz = 300e9
-        antenna_diameter = scenario.default_antenna_diameter
-        tx_power_dBm = scenario.default_tx_power_dBm
         
         profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
         
         data_to_save = {
-            'snr_dB': simulation.SNR_dB_array.tolist(),
+            'snr_dB': snr_dB.tolist(),
             'frequency_GHz': frequency_Hz/1e9,
-            'antenna_diameter_m': antenna_diameter,
-            'tx_power_dBm': tx_power_dBm
+            'hardware_profiles': profiles_to_plot
         }
+        
+        # Track data ranges
+        all_rmse = []
         
         for i, hardware_profile in enumerate(profiles_to_plot):
             if hardware_profile not in HARDWARE_PROFILES:
                 continue
-                
+            
             profile = HARDWARE_PROFILES[hardware_profile]
-                # Calculate theoretical hardware-limited floor
-            # At high SNR: SNR_eff → 1/(Γ·exp(σ_φ²))
-            SNR_eff_limit = 1.0 / (profile.Gamma_eff * np.exp(profile.phase_noise_variance))
             
-            # BCRLB floor
-            phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * frequency_Hz**2)
-            bcrlb_floor = phase_term * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff_limit)
-            rmse_floor_mm = np.sqrt(bcrlb_floor) * 1000
-            
-            # Draw horizontal platform line
-            ax.axhline(y=rmse_floor_mm, color=colors[i], linestyle='--', 
-                    alpha=0.3, linewidth=1.0)
-            
-            # Add text annotation for the floor
-            ax.text(55, rmse_floor_mm * 1.2, f'{hardware_profile.split("_")[0]} floor',
-                fontsize=IEEEStyle.FONT_SIZES['annotation']-1,
-                color=colors[i], alpha=0.7)
-            
-            B = self.calculate_bussgang_gain()
-            
-            ranging_rmse_mm = []
-            
-            print(f"  Processing {hardware_profile}...")
-            
-            for snr_dB in tqdm(simulation.SNR_dB_array, desc=f"    SNR sweep", leave=False):
-                snr_linear = 10 ** (snr_dB / 10)
-                
-                g = self.calculate_channel_gain(scenario.R_default, frequency_Hz, antenna_diameter)
-                
-                # Use new method signature with SNR_eff
-                sigma_eff_sq, N_thermal, SNR_eff = self.calculate_effective_noise_variance_mc(
-                    snr_linear, g, hardware_profile, tx_power_dBm=tx_power_dBm,
-                    frequency_Hz=frequency_Hz, antenna_diameter=antenna_diameter,
-                    n_mc=100
+            # Calculate RMSE for each SNR
+            rmse_mm = []
+            for snr_point in 10**(snr_dB/10):
+                sigma_eff_sq, _, SNR_eff = self.calculate_effective_noise_variance_mc(
+                    snr_point, 1.0, hardware_profile, 1.0, bandwidth_Hz=10e9,
+                    frequency_Hz=frequency_Hz, n_mc=50
                 )
                 
-                # Pass SNR_eff to BCRLB calculation
-                bcrlbs = self.calculate_observable_bcrlb_mc(
-                    frequency_Hz, sigma_eff_sq, simulation.n_pilots,
-                    g, B, profile.phase_noise_variance,
-                    antenna_diameter=antenna_diameter, n_mc=100,
-                    SNR_eff=SNR_eff  # Pass the calculated SNR_eff
-                )
-                
-                rmse_m = np.sqrt(bcrlbs['range'])
-                ranging_rmse_mm.append(rmse_m * 1000)
+                phase_term = PhysicalConstants.c**2 / (8 * np.pi**2 * frequency_Hz**2)
+                bcrlb = phase_term * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff)
+                rmse_mm.append(np.sqrt(bcrlb) * 1000)
             
-            # Store data and plot (rest remains the same)
-            data_to_save[f'ranging_rmse_mm_{hardware_profile}'] = ranging_rmse_mm
+            rmse_mm = np.array(rmse_mm)
+            all_rmse.extend(rmse_mm[np.isfinite(rmse_mm)])  # Track valid values
             
-            ax.semilogy(simulation.SNR_dB_array, ranging_rmse_mm,
+            data_to_save[f'rmse_mm_{hardware_profile}'] = rmse_mm.tolist()
+            
+            ax.semilogy(snr_dB, rmse_mm, 
                     color=colors[i], 
                     linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                     marker=markers[i], 
-                    markersize=IEEEStyle.LINE_PROPS['markersize'],
+                    markersize=IEEEStyle.LINE_PROPS['markersize']-1,
                     markevery=10,
+                    markerfacecolor='white', 
                     markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
-                    markerfacecolor='white',
                     label=f'{hardware_profile.replace("_", " ")}')
         
-        # Add performance thresholds
-        ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
-        ax.text(35, 1.2, '1 mm', fontsize=IEEEStyle.FONT_SIZES['annotation'], 
-                ha='center', color='gray')
+        # AUTO-SCALE y-axis based on actual data
+        if all_rmse:
+            valid_rmse = [r for r in all_rmse if r > 0 and np.isfinite(r)]
+            if valid_rmse:
+                rmse_min, rmse_max = min(valid_rmse), max(valid_rmse)
+                # Add margins in log space
+                log_range = np.log10(rmse_max) - np.log10(rmse_min)
+                y_min = 10**(np.log10(rmse_min) - 0.1 * log_range)
+                y_max = 10**(np.log10(rmse_max) + 0.3 * log_range)  # Extra space for legend
+                ax.set_ylim(y_min, y_max)
         
-        ax.axhline(y=0.1, color='green', linestyle=':', linewidth=1.5, alpha=0.7)
-        ax.text(35, 0.12, '0.1 mm', fontsize=IEEEStyle.FONT_SIZES['annotation'], 
-                ha='center', color='green')
-        
-        # Labels and formatting
+        # Configure plot
         ax.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
         ax.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-        ax.set_title('Ranging Performance vs. SNR (All Hardware Profiles)', 
+        ax.set_title(f'Ranging Accuracy vs SNR at {frequency_Hz/1e9:.0f} GHz',
                     fontsize=IEEEStyle.FONT_SIZES['title'])
-        
-        # Grid
         ax.grid(True, **IEEEStyle.GRID_PROPS)
+        ax.legend(loc='best', fontsize=IEEEStyle.FONT_SIZES['legend'])
         
-        # Legend
-        ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'],
-                 frameon=True, edgecolor='black', framealpha=0.9)
-        
-        # Axis limits with padding
-        ax.set_xlim(-10, 60)
-        ax.set_ylim(1e-3, 1e3)
-        
-        # Tight layout
         plt.tight_layout()
-        
-        # Save figure
         plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
         plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        # Save data
-        data_saver.save_data(save_name, data_to_save, 
-                           "Ranging CRLB vs SNR for different hardware profiles")
+        data_saver.save_data(save_name, data_to_save,
+                        "Ranging CRLB vs SNR for all hardware profiles")
         
         print(f"Saved: results/{save_name}.pdf/png and data")
-    
+
+        
     def plot_ranging_vs_frequency(self, save_name='fig_ranging_vs_frequency'):
         """Plot ranging performance vs frequency (separate plot)."""
         print(f"\n=== Generating {save_name} ===")

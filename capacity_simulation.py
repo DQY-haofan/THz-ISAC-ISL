@@ -389,10 +389,11 @@ def generate_cd_frontier_with_overhead(system, K_total=1024, P_tx_scales=None, n
     
     return np.array(pareto_D), np.array(pareto_C)
 
-
+# 文件: capacity_simulation.py
+# 修改 plot_cd_frontier 函数
 
 def plot_cd_frontier(save_name='fig_cd_frontier'):
-    """Plot C-D frontier for all hardware profiles with pilot overhead."""
+    """Plot C-D frontier with auto-scaled axes."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
@@ -404,6 +405,10 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         'frame_size': 1024
     }
     
+    # Track data ranges
+    all_rmse = []
+    all_capacity = []
+    
     for profile_idx, profile_name in enumerate(profiles_to_plot):
         if profile_name not in HARDWARE_PROFILES:
             continue
@@ -411,7 +416,6 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         print(f"  Processing {profile_name}...")
         system = EnhancedISACSystem(profile_name)
         
-        # Generate C-D frontier with overhead
         distortions, capacities = generate_cd_frontier_with_overhead(
             system,
             K_total=1024,
@@ -422,11 +426,14 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000
             
+            # Track ranges
+            all_rmse.extend(ranging_rmse_mm)
+            all_capacity.extend(capacities)
+            
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
             data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
             data_to_save[f'num_points_{profile_name}'] = len(capacities)
             
-            # Add to diagnostics
             diagnostics.add_key_metric(
                 "CD_Frontier", 
                 f"{profile_name}_MaxCapacity", 
@@ -442,17 +449,15 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                 "mm"
             )
             
-            # Plot complete frontier curve
             ax.plot(ranging_rmse_mm, capacities,
-                   color=colors[profile_idx],  # Use profile_idx
+                   color=colors[profile_idx],
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    linestyle='-',
                    label=f'{profile_name.replace("_", " ")}')
             
-            # Add markers
             if len(ranging_rmse_mm) > 1:
                 marker_indices = np.linspace(0, len(ranging_rmse_mm)-1, 
-                                            min(10, len(ranging_rmse_mm)), dtype=int)
+                                            min(8, len(ranging_rmse_mm)), dtype=int)
                 ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
                        color=colors[profile_idx],
                        linestyle='None',
@@ -461,30 +466,31 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                        markerfacecolor='white', 
                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
     
-    # Adjust x-axis range
+    # AUTO-SCALE axes
+    if all_rmse and all_capacity:
+        # X-axis (log scale)
+        rmse_min, rmse_max = min(all_rmse), max(all_rmse)
+        log_range = np.log10(rmse_max) - np.log10(rmse_min)
+        x_min = 10**(np.log10(rmse_min) - 0.1 * log_range)
+        x_max = 10**(np.log10(rmse_max) + 0.3 * log_range)
+        ax.set_xlim(x_min, x_max)
+        
+        # Y-axis
+        c_min, c_max = min(all_capacity), max(all_capacity)
+        c_range = c_max - c_min
+        y_min = max(0, c_min - 0.1 * c_range)
+        y_max = c_max + 0.2 * c_range
+        ax.set_ylim(y_min, y_max)
+    
     ax.set_xscale('log')
-    ax.set_xlim(1e-4, 1e-1)  # Focus on the interesting range
-    ax.set_ylim(1, 7)  # Adjusted to show curves better
-
+    
     # Labels
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
     ax.set_ylabel('Effective Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Capacity-Distortion Trade-off with Pilot Overhead', 
+    ax.set_title('Capacity-Distortion Trade-off', 
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     ax.grid(True, **IEEEStyle.GRID_PROPS)
-    ax.legend(loc='lower left', fontsize=IEEEStyle.FONT_SIZES['legend'])
-    
-    # Adjust text position for frame/power info
-    ax.text(0.98, 0.98,  # Moved to top-right
-           r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
-           'Frame: K=1024 symbols\n' +
-           'Power: -25dB to +10dB\n' +
-           'Pilots: 8 to 512',
-           transform=ax.transAxes,
-           fontsize=IEEEStyle.FONT_SIZES['annotation']-2,
-           ha='right', va='top',  # Changed alignment
-           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
-                    edgecolor='gray', alpha=0.9))
+    ax.legend(loc='best', fontsize=IEEEStyle.FONT_SIZES['legend'])
     
     plt.tight_layout()
     plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -495,10 +501,6 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                        "Capacity-Distortion frontier with pilot overhead")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-    for profile in profiles_to_plot:
-        if f'num_points_{profile}' in data_to_save:
-            print(f"  {profile}: {data_to_save[f'num_points_{profile}']} frontier points")
-
             
 
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
