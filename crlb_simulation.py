@@ -688,7 +688,7 @@ class EnhancedCRLBAnalyzer:
                 capacity_grid[i, j] = np.mean(I_x)
         
         # Create single optimized view
-        fig = plt.figure(figsize=(10, 8))
+        fig = plt.figure(figsize=(15, 8))
         ax = fig.add_subplot(111, projection='3d')
         
         # Surface plot
