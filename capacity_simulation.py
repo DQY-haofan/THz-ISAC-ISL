@@ -822,117 +822,122 @@ def plot_hardware_quality_impact(save_name='fig_hardware_quality_impact'):
     print(f"Saved: results/{save_name}.pdf/png and data")
 
 def plot_3d_capacity_landscape(save_name='fig_3d_capacity_landscape'):
-    """Plot 3D capacity landscape with multiple viewing angles."""
+    """Generate 3D performance landscape with proper labels."""
     print(f"\n=== Generating {save_name} ===")
     
-    # Parameter ranges
-    frequencies_GHz = np.linspace(100, 1000, 15)
-    distances_km = np.linspace(500, 5000, 15)
-    
-    # Create meshgrid
+    # Generate grid data
+    frequencies_GHz = np.linspace(100, 1000, 30)
+    distances_km = np.linspace(500, 5000, 30)
     F, D = np.meshgrid(frequencies_GHz, distances_km)
-    
-    # Fixed parameters
-    hardware_profile = "High_Performance"
     
     # Calculate capacity for each point
     capacity_grid = np.zeros_like(F)
     
-    print("  Computing 3D capacity landscape...")
-    for i in tqdm(range(F.shape[0]), desc="    Distance levels"):
+    for i in range(F.shape[0]):
         for j in range(F.shape[1]):
-            f_Hz = F[i, j] * 1e9
-            d_m = D[i, j] * 1e3
+            freq_Hz = F[i, j] * 1e9
+            dist_m = D[i, j] * 1e3
             
-            # Create system
-            system = EnhancedISACSystem(hardware_profile, f_c=f_Hz, distance=d_m)
+            # Create system and calculate capacity
+            self.f_c = freq_Hz
+            self.distance = dist_m
+            self.lambda_c = PhysicalConstants.c / freq_Hz
+            self._calculate_enhanced_link_budget()
             
             # Calculate capacity
-            p_x = np.ones(len(system.constellation)) / len(system.constellation)
-            I_x = system.calculate_mutual_information(p_x, n_mc=50)
+            p_x = np.ones(len(self.constellation)) / len(self.constellation)
+            I_x = self.calculate_mutual_information(p_x, P_tx_scale=1.0, n_mc=30)
             capacity_grid[i, j] = np.mean(I_x)
     
-    # Add to diagnostics
-    diagnostics.add_key_metric(
-        "3D_Landscape",
-        "Max_Capacity",
-        np.max(capacity_grid),
-        (0, 10),
-        "bits/symbol"
-    )
-    diagnostics.add_key_metric(
-        "3D_Landscape",
-        "Min_Capacity",
-        np.min(capacity_grid),
-        (0, 10),
-        "bits/symbol"
-    )
-    diagnostics.add_key_metric(
-        "3D_Landscape",
-        "Capacity_1THz_2000km",
-        capacity_grid[np.argmin(np.abs(distances_km - 2000)), 
-                     np.argmin(np.abs(frequencies_GHz - 1000))],
-        (0, 10),
-        "bits/symbol"
-    )
+    # Create single optimized view
+    fig = plt.figure(figsize=(11, 8))
+    ax = fig.add_subplot(111, projection='3d')
     
-    # Data storage
+    # Surface plot
+    surf = ax.plot_surface(F, D, capacity_grid, 
+                          cmap='viridis', 
+                          edgecolor='none', 
+                          alpha=0.9,
+                          antialiased=True)
+    
+    # Add contour lines at the bottom (without red line)
+    contours = ax.contour(F, D, capacity_grid, 
+                          zdir='z', 
+                          offset=np.min(capacity_grid) - 0.5,
+                          cmap='viridis', 
+                          alpha=0.5,
+                          linewidths=1.0)
+    
+    # CRITICAL: Set all axis labels with proper spacing
+    ax.set_xlabel('Frequency (GHz)', 
+                 fontsize=IEEEStyle.FONT_SIZES['label'], 
+                 labelpad=10)
+    ax.set_ylabel('Distance (km)', 
+                 fontsize=IEEEStyle.FONT_SIZES['label'], 
+                 labelpad=10)
+    ax.set_zlabel('Capacity (bits/symbol)', 
+                 fontsize=IEEEStyle.FONT_SIZES['label'], 
+                 labelpad=15)  # Extra padding for Z-label
+    
+    # Set title with proper spacing
+    ax.set_title('THz ISL ISAC Capacity Landscape\n(High Performance Hardware)', 
+                fontsize=IEEEStyle.FONT_SIZES['title'], 
+                pad=20)
+    
+    # Optimize viewing angle for best visibility
+    ax.view_init(elev=25, azim=45)
+    
+    # Adjust axis properties
+    ax.set_xlim(100, 1000)
+    ax.set_ylim(500, 5000)
+    ax.set_zlim(np.min(capacity_grid) - 0.5, np.max(capacity_grid) + 0.5)
+    
+    # Format tick labels
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x)}'))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x)}'))
+    ax.zaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}'))
+    
+    # Adjust tick label size
+    ax.tick_params(axis='both', which='major', 
+                  labelsize=IEEEStyle.FONT_SIZES['tick'])
+    ax.tick_params(axis='z', which='major', 
+                  labelsize=IEEEStyle.FONT_SIZES['tick'])
+    
+    # Add colorbar with proper label
+    cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10, pad=0.1)
+    cbar.set_label('Capacity (bits/symbol)', 
+                  fontsize=IEEEStyle.FONT_SIZES['label'],
+                  rotation=270, 
+                  labelpad=20)
+    cbar.ax.tick_params(labelsize=IEEEStyle.FONT_SIZES['tick'])
+    
+    # Set background color
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.grid(True, alpha=0.3)
+    
+    # Ensure Z-label is visible by adjusting distance
+    ax.dist = 11  # Default is 10, increase for better label visibility
+    
+    # Save figure
+    plt.tight_layout()
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Save data
     data_to_save = {
         'frequency_GHz': frequencies_GHz.tolist(),
         'distance_km': distances_km.tolist(),
         'capacity_grid': capacity_grid.tolist(),
-        'hardware_profile': hardware_profile
+        'hardware_profile': 'High_Performance'
     }
     
-    # Create multiple views
-    viewing_angles = [
-        (25, 45, 'default'),
-        (15, 60, 'frequency_emphasis'),
-        (30, 15, 'distance_emphasis'),
-        (45, 45, 'isometric')
-    ]
-    
-    for elev, azim, view_name in viewing_angles:
-        fig = plt.figure(figsize=IEEEStyle.FIG_SIZES['3d'])
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # Surface plot
-        surf = ax.plot_surface(F, D, capacity_grid, cmap='viridis', 
-                              edgecolor='none', alpha=0.8)
-        
-        # Add contour lines at the bottom
-        contours = ax.contour(F, D, capacity_grid, zdir='z', offset=0, 
-                              cmap='viridis', alpha=0.5)
-        
-        # FIX: Ensure z-label is visible
-        ax.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'], labelpad=10)
-        ax.set_ylabel('Distance (km)', fontsize=IEEEStyle.FONT_SIZES['label'], labelpad=10)
-        ax.set_zlabel('Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'], labelpad=10)
-        ax.set_title('THz ISL ISAC Capacity Landscape\n(High Performance Hardware)', 
-                    fontsize=IEEEStyle.FONT_SIZES['title'], pad=20)
-        
-        ax.dist = 11  # Default is 10
-        # Add colorbar
-        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
-        
-        # Set viewing angle
-        ax.view_init(elev=elev, azim=azim)
-        
-        # Highlight 1THz
-        ax.plot([1000, 1000], [distances_km[0], distances_km[-1]], 
-               [0, 0], 'r--', linewidth=2, alpha=0.7)
-        
-        plt.tight_layout()
-        plt.savefig(f'results/{save_name}_{view_name}.pdf', 
-                   format='pdf', dpi=300, bbox_inches='tight')
-        plt.savefig(f'results/{save_name}_{view_name}.png', 
-                   format='png', dpi=300, bbox_inches='tight')
-        plt.close()
-    
     data_saver.save_data(save_name, data_to_save,
-                       "3D capacity landscape data")
+                       "3D capacity landscape for High Performance hardware")
     
-    print(f"Saved: results/{save_name}_[views].pdf/png and data")
+    print(f"Saved: results/{save_name}.pdf/png and data")
 
 def simple_cd_optimization(system: EnhancedISACSystem, D_target: float,
                           max_iterations: int = 20, n_mc: int = 100) -> Tuple[float, np.ndarray]:
