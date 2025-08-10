@@ -323,7 +323,8 @@ class EnhancedCRLBAnalyzer:
         
         print(f"Saved: results/{save_name}.pdf/png and data")
 
-    # 添加新的合并函数：
+
+
     def plot_ranging_velocity_vs_frequency(self, save_name='fig_ranging_velocity_vs_frequency'):
         """Plot both ranging RMSE and velocity RMSE vs frequency in one figure."""
         print(f"\n=== Generating {save_name} ===")
@@ -338,11 +339,15 @@ class EnhancedCRLBAnalyzer:
         target_snr_dB = 30
         snr_linear = 10**(target_snr_dB/10)
         
+        # DEFINE T_obs here (observation time for velocity measurement)
+        T_obs = 0.001  # 1 ms observation time (typical for ISL)
+        
         profiles_to_plot = ["High_Performance"]  # Or include more if needed
         
         data_to_save = {
             'frequency_GHz': frequencies_GHz.tolist(),
             'snr_dB': target_snr_dB,
+            'T_obs_ms': T_obs * 1000,  # Store in milliseconds
             'hardware_profiles': profiles_to_plot
         }
         
@@ -365,8 +370,8 @@ class EnhancedCRLBAnalyzer:
                 bcrlb_r = phase_term_r * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff)
                 ranging_rmse_mm.append(np.sqrt(bcrlb_r) * 1000)
                 
-                # Velocity RMSE
-                phase_term_v = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2 * simulation.T_obs**2)
+                # Velocity RMSE - FIXED: Use local T_obs instead of simulation.T_obs
+                phase_term_v = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2 * T_obs**2)
                 bcrlb_v = phase_term_v * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff)
                 velocity_rmse_mps.append(np.sqrt(bcrlb_v))
             
@@ -418,7 +423,15 @@ class EnhancedCRLBAnalyzer:
         ax1.legend(lines, labels, loc='upper right', 
                 fontsize=IEEEStyle.FONT_SIZES['legend'])
         
-        ax1.set_title(f'Frequency Scaling of Sensing Performance (SNR = {target_snr_dB} dB)',
+        # Add info box with T_obs
+        info_text = f'SNR = {target_snr_dB} dB\n$T_{{obs}}$ = {T_obs*1000:.1f} ms'
+        ax1.text(0.02, 0.98, info_text,
+                transform=ax1.transAxes,
+                fontsize=IEEEStyle.FONT_SIZES['annotation'],
+                va='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        ax1.set_title('Frequency Scaling of Sensing Performance',
                     fontsize=IEEEStyle.FONT_SIZES['title'])
         ax1.grid(True, **IEEEStyle.GRID_PROPS, which='both')
         ax1.set_xlim(100, 1000)
@@ -432,7 +445,6 @@ class EnhancedCRLBAnalyzer:
                         "Combined ranging and velocity RMSE vs frequency")
         
         print(f"Saved: results/{save_name}.pdf/png and data")
-
 
     def plot_velocity_vs_frequency(self, save_name='fig_velocity_vs_frequency'):
         """Plot velocity estimation performance vs frequency (separate plot)."""
