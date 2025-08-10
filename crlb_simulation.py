@@ -323,6 +323,116 @@ class EnhancedCRLBAnalyzer:
         
         print(f"Saved: results/{save_name}.pdf/png and data")
 
+    # 添加新的合并函数：
+    def plot_ranging_velocity_vs_frequency(self, save_name='fig_ranging_velocity_vs_frequency'):
+        """Plot both ranging RMSE and velocity RMSE vs frequency in one figure."""
+        print(f"\n=== Generating {save_name} ===")
+        
+        fig, ax1 = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
+        
+        # Frequency range
+        frequencies_GHz = np.logspace(np.log10(100), np.log10(1000), 50)
+        frequencies_Hz = frequencies_GHz * 1e9
+        
+        # SNR settings
+        target_snr_dB = 30
+        snr_linear = 10**(target_snr_dB/10)
+        
+        profiles_to_plot = ["High_Performance"]  # Or include more if needed
+        
+        data_to_save = {
+            'frequency_GHz': frequencies_GHz.tolist(),
+            'snr_dB': target_snr_dB,
+            'hardware_profiles': profiles_to_plot
+        }
+        
+        for i, hardware_profile in enumerate(profiles_to_plot):
+            profile = HARDWARE_PROFILES[hardware_profile]
+            
+            # Calculate ranging and velocity RMSE
+            ranging_rmse_mm = []
+            velocity_rmse_mps = []
+            
+            for f_c in frequencies_Hz:
+                # Effective noise calculation
+                _, _, SNR_eff = self.calculate_effective_noise_variance_mc(
+                    snr_linear, 1.0, hardware_profile, 1.0,
+                    bandwidth_Hz=10e9, frequency_Hz=f_c, n_mc=50
+                )
+                
+                # Ranging RMSE
+                phase_term_r = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
+                bcrlb_r = phase_term_r * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff)
+                ranging_rmse_mm.append(np.sqrt(bcrlb_r) * 1000)
+                
+                # Velocity RMSE
+                phase_term_v = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2 * simulation.T_obs**2)
+                bcrlb_v = phase_term_v * np.exp(profile.phase_noise_variance) / (simulation.n_pilots * SNR_eff)
+                velocity_rmse_mps.append(np.sqrt(bcrlb_v))
+            
+            ranging_rmse_mm = np.array(ranging_rmse_mm)
+            velocity_rmse_mps = np.array(velocity_rmse_mps)
+            
+            data_to_save[f'ranging_rmse_mm_{hardware_profile}'] = ranging_rmse_mm.tolist()
+            data_to_save[f'velocity_rmse_mps_{hardware_profile}'] = velocity_rmse_mps.tolist()
+            
+            # Plot ranging on primary y-axis (left)
+            color1 = 'blue'
+            line1 = ax1.loglog(frequencies_GHz, ranging_rmse_mm, 
+                            color=color1, 
+                            linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                            marker='o', markersize=4, markevery=5,
+                            label='Ranging RMSE')
+            ax1.set_xlabel('Frequency (GHz)', fontsize=IEEEStyle.FONT_SIZES['label'])
+            ax1.set_ylabel('Ranging RMSE (mm)', color=color1, 
+                        fontsize=IEEEStyle.FONT_SIZES['label'])
+            ax1.tick_params(axis='y', labelcolor=color1)
+            
+            # Create secondary y-axis (right) for velocity
+            ax2 = ax1.twinx()
+            color2 = 'red'
+            line2 = ax2.loglog(frequencies_GHz, velocity_rmse_mps, 
+                            color=color2, 
+                            linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                            marker='^', markersize=4, markevery=5,
+                            label='Velocity RMSE')
+            ax2.set_ylabel('Velocity RMSE (m/s)', color=color2,
+                        fontsize=IEEEStyle.FONT_SIZES['label'])
+            ax2.tick_params(axis='y', labelcolor=color2)
+            
+            # Add theoretical slopes as thin dashed lines
+            f_ref = 300  # Reference frequency in GHz
+            r_ref_idx = np.argmin(np.abs(frequencies_GHz - f_ref))
+            
+            # f^-2 slope for ranging (thin, semi-transparent)
+            ranging_theory = ranging_rmse_mm[r_ref_idx] * (frequencies_GHz/f_ref)**(-2)
+            ax1.plot(frequencies_GHz, ranging_theory, 'b:', alpha=0.3, linewidth=1)
+            
+            # f^-1 slope for velocity (thin, semi-transparent)
+            velocity_theory = velocity_rmse_mps[r_ref_idx] * (frequencies_GHz/f_ref)**(-1)
+            ax2.plot(frequencies_GHz, velocity_theory, 'r:', alpha=0.3, linewidth=1)
+        
+        # Combined legend
+        lines = [line1[0], line2[0]]
+        labels = ['Ranging RMSE', 'Velocity RMSE']
+        ax1.legend(lines, labels, loc='upper right', 
+                fontsize=IEEEStyle.FONT_SIZES['legend'])
+        
+        ax1.set_title(f'Frequency Scaling of Sensing Performance (SNR = {target_snr_dB} dB)',
+                    fontsize=IEEEStyle.FONT_SIZES['title'])
+        ax1.grid(True, **IEEEStyle.GRID_PROPS, which='both')
+        ax1.set_xlim(100, 1000)
+        
+        plt.tight_layout()
+        plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        data_saver.save_data(save_name, data_to_save,
+                        "Combined ranging and velocity RMSE vs frequency")
+        
+        print(f"Saved: results/{save_name}.pdf/png and data")
+
 
     def plot_velocity_vs_frequency(self, save_name='fig_velocity_vs_frequency'):
         """Plot velocity estimation performance vs frequency (separate plot)."""
@@ -794,11 +904,12 @@ def main():
     
     # Generate all plots
     analyzer.plot_ranging_crlb_vs_snr()
-    analyzer.plot_ranging_vs_frequency()
-    analyzer.plot_velocity_vs_frequency()
-    analyzer.plot_pointing_error_sensitivity()
+    # analyzer.plot_ranging_vs_frequency()
+    # analyzer.plot_velocity_vs_frequency()
+    analyzer.plot_ranging_velocity_vs_frequency()
+    # analyzer.plot_pointing_error_sensitivity()
     analyzer.plot_feasibility_map()
-    analyzer.plot_3d_performance_landscape()
+    # analyzer.plot_3d_performance_landscape()
     
     print("\n=== CRLB Analysis Complete ===")
     print("Generated files in results/:")

@@ -821,6 +821,90 @@ def plot_snr_to_hardware_limit(save_name='fig_snr_to_hardware_limit'):
     
     print(f"Saved: results/{save_name}.pdf/png and data")
 
+# 添加新函数：
+def plot_hardware_quality_impact_rmse(save_name='fig_hardware_quality_impact_rmse'):
+    """Plot RMSE degradation due to hardware quality across SNR range."""
+    print(f"\n=== Generating {save_name} ===")
+    
+    fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
+    
+    snr_dB = np.linspace(-10, 50, 61)
+    snr_linear = 10**(snr_dB/10)
+    
+    profiles_to_plot = ["State_of_Art", "High_Performance", "SWaP_Efficient", "Low_Cost"]
+    
+    # Parameters
+    f_c = 300e9
+    M = 64  # Number of pilots
+    kappa_r = PhysicalConstants.c**2 / (8 * np.pi**2 * f_c**2)
+    
+    data_to_save = {
+        'snr_dB': snr_dB.tolist(),
+        'frequency_GHz': f_c/1e9,
+        'M_pilots': M,
+        'hardware_profiles': profiles_to_plot
+    }
+    
+    for idx, profile_name in enumerate(profiles_to_plot):
+        profile = HARDWARE_PROFILES[profile_name]
+        
+        # Calculate hardware-aware RMSE
+        SNR_eff = (snr_linear * np.exp(-profile.phase_noise_variance)) / \
+                  (1 + snr_linear * profile.Gamma_eff)
+        rmse_hw = np.sqrt(kappa_r * np.exp(profile.phase_noise_variance) / (M * SNR_eff)) * 1000  # mm
+        
+        data_to_save[f'rmse_mm_{profile_name}'] = rmse_hw.tolist()
+        
+        # Plot
+        ax.semilogy(snr_dB, rmse_hw, 
+                   color=colors[idx], 
+                   linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+                   marker=markers[idx], 
+                   markersize=IEEEStyle.LINE_PROPS['markersize']-1,
+                   markevery=10,
+                   markerfacecolor='white', 
+                   markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
+                   label=f'{profile_name.replace("_", " ")}')
+        
+        # Add hardware floor as thin dotted line
+        rmse_floor = np.sqrt(kappa_r * profile.Gamma_eff * np.exp(2*profile.phase_noise_variance) / M) * 1000
+        ax.axhline(rmse_floor, color=colors[idx], linestyle=':', 
+                  linewidth=1.0, alpha=0.5)
+    
+    # Add conventional CRLB for reference (dashed black)
+    rmse_conventional = np.sqrt(kappa_r / (M * snr_linear)) * 1000
+    ax.semilogy(snr_dB, rmse_conventional, 'k--', 
+               linewidth=IEEEStyle.LINE_PROPS['linewidth'],
+               alpha=0.6, label='Conventional CRLB')
+    
+    # Configure plot
+    ax.set_xlabel('SNR (dB)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_ylabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_title('Hardware Quality Impact on Ranging Accuracy',
+                fontsize=IEEEStyle.FONT_SIZES['title'])
+    ax.grid(True, **IEEEStyle.GRID_PROPS)
+    ax.legend(loc='upper right', fontsize=IEEEStyle.FONT_SIZES['legend'])
+    ax.set_xlim(-10, 50)
+    ax.set_ylim(1e-4, 1e2)
+    
+    # Add annotation
+    ax.text(0.02, 0.02, f'$f_c$ = {f_c/1e9:.0f} GHz\nM = {M} pilots',
+           transform=ax.transAxes,
+           fontsize=IEEEStyle.FONT_SIZES['annotation'],
+           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.tight_layout()
+    plt.savefig(f'results/{save_name}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'results/{save_name}.png', format='png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    data_saver.save_data(save_name, data_to_save,
+                       "Hardware quality impact on ranging RMSE")
+    
+    print(f"Saved: results/{save_name}.pdf/png and data")
+
+
+
 def plot_gamma_eff_sensitivity(save_name='fig_gamma_eff_sensitivity'):
     """Plot system performance sensitivity to hardware quality factor."""
     print(f"\n=== Generating {save_name} ===")
@@ -1329,11 +1413,12 @@ def main():
     
     # Generate all plots
     plot_cd_frontier_all_profiles()
-    plot_cd_frontier_pointing_sensitivity()
-    plot_snr_to_hardware_limit()
-    plot_gamma_eff_sensitivity()
-    plot_3d_cd_landscape()
-    plot_isac_feasibility_regions()
+    # plot_cd_frontier_pointing_sensitivity()
+    # plot_snr_to_hardware_limit()
+    # plot_gamma_eff_sensitivity()
+    # plot_3d_cd_landscape()
+    # plot_hardware_quality_impact_rmse()
+    # plot_isac_feasibility_regions()
     
     print("\n=== Analysis Complete ===")
     print("Generated files in results/:")
