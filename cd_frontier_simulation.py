@@ -372,14 +372,14 @@ class ISACSystem:
 # =========================================================================
 
 
-# 完全替换 compute_cd_frontier_grid_full 函数
 def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None, 
                                   K_total=1024, n_mc=100):
     """
-    Compute full C-D frontier with effective spectral efficiency.
+    Compute full C-D frontier with NET RATE (bits/s) instead of bits/symbol.
     
-    Key change: Account for pilot overhead in capacity calculation.
-    C_eff = (1 - M/K) * C_per_symbol
+    Key change: 
+    - Old: C_eff = (1 - M/K) * C_per_symbol  [bits/symbol]
+    - New: R_eff = (1 - M/K) * C_per_symbol * B  [bits/s]
     
     Args:
         system: ISACSystem instance
@@ -389,14 +389,12 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
         n_mc: Monte Carlo samples
         
     Returns:
-        Arrays of (distortions, capacities) forming the Pareto frontier
+        Arrays of (distortions, net_rates) forming the Pareto frontier
     """
     if P_tx_scales is None:
-        # VERY wide range to span from noise-limited to hardware-limited
         P_tx_scales = np.logspace(-3, +1, 100)  # 0.001x to 10x (40dB range)
         
     if pilot_counts is None:
-        # Various pilot counts
         pilot_counts = [8, 16, 32, 64, 128, 256]
     
     # Filter valid pilot counts
@@ -409,6 +407,7 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
     
     print(f"      Grid search: {len(P_tx_scales)} powers × {len(pilot_counts)} pilots")
     print(f"      Frame size K={K_total} symbols")
+    print(f"      Bandwidth: {system.profile.signal_bandwidth_Hz/1e9:.1f} GHz")  # 新增：显示带宽
     
     original_pilots = system.n_pilots
     
@@ -426,8 +425,9 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
                 )
                 C_per_symbol = float(np.mean(I_vec))
                 
-                # CRITICAL: Apply pilot overhead penalty
-                C_effective = (1.0 - alpha) * C_per_symbol
+                # CRITICAL CHANGE: Calculate NET RATE in bits/s
+                eta = (1.0 - alpha)  # Payload fraction
+                R_effective = eta * C_per_symbol * system.profile.signal_bandwidth_Hz  # bits/s
                 
                 # Calculate distortion (RMSE²)
                 distortion = system.calculate_distortion(
@@ -435,14 +435,15 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
                 )
                 
                 # Store valid points
-                if distortion > 0 and distortion < 1e10 and C_effective >= 0:
+                if distortion > 0 and distortion < 1e10 and R_effective >= 0:
                     all_points.append({
                         'D': distortion,
-                        'C': C_effective,  # Use effective capacity
-                        'C_per': C_per_symbol,  # Store original too
+                        'R': R_effective,  # Changed from 'C' to 'R' (rate)
+                        'C_per': C_per_symbol,  # Keep original for reference
                         'P_scale': P_scale,
                         'M': M,
-                        'alpha': alpha
+                        'alpha': alpha,
+                        'B_Hz': system.profile.signal_bandwidth_Hz  # Store bandwidth
                     })
             except:
                 continue
@@ -460,33 +461,33 @@ def compute_cd_frontier_grid_full(system, P_tx_scales=None, pilot_counts=None,
     
     # Extract Pareto frontier
     pareto_points = []
-    max_capacity = -np.inf
+    max_rate = -np.inf
     
     for point in all_points:
-        # Include point if it improves capacity
-        if point['C'] > max_capacity:
+        # Include point if it improves rate
+        if point['R'] > max_rate:
             pareto_points.append(point)
-            max_capacity = point['C']
+            max_rate = point['R']
     
     if len(pareto_points) > 0:
         pareto_D = np.array([p['D'] for p in pareto_points])
-        pareto_C = np.array([p['C'] for p in pareto_points])
+        pareto_R = np.array([p['R'] for p in pareto_points])
         
         print(f"      Pareto frontier: {len(pareto_points)} points")
         print(f"      D range: [{np.min(pareto_D):.2e}, {np.max(pareto_D):.2e}]")
-        print(f"      C_eff range: [{np.min(pareto_C):.2f}, {np.max(pareto_C):.2f}] bits/symbol")
+        print(f"      R_eff range: [{np.min(pareto_R)/1e9:.2f}, {np.max(pareto_R)/1e9:.2f}] Gbps")  # 改为Gbps显示
         
         # Show impact of pilot overhead
         avg_alpha = np.mean([p['alpha'] for p in pareto_points])
         print(f"      Average pilot overhead: {avg_alpha:.1%}")
         
-        return pareto_D, pareto_C
+        return pareto_D, pareto_R
     else:
         return np.array([]), np.array([])
 
 
 def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
-    """Plot C-D frontier with effective spectral efficiency and auto-scaled axes."""
+    """Plot C-D frontier with NET RATE (bits/s) and auto-scaled axes."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
@@ -495,13 +496,13 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     
     data_to_save = {
         'hardware_profiles': profiles_to_plot,
-        'description': 'C-D frontiers with pilot overhead penalty',
+        'description': 'C-D frontiers with NET RATE (bits/s)',
         'frame_size': 1024
     }
     
     # Track data ranges for auto-scaling
     all_rmse = []
-    all_capacity = []
+    all_rates = []  # Changed from all_capacity
     
     for profile_idx, profile_name in enumerate(profiles_to_plot):
         if profile_name not in HARDWARE_PROFILES:
@@ -518,7 +519,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
             tx_power_dBm=28
         )
         
-        distortions, capacities = compute_cd_frontier_grid_full(
+        distortions, net_rates = compute_cd_frontier_grid_full(
             system,
             P_tx_scales=np.logspace(-2.5, +1, 120),
             pilot_counts=[8, 16, 32, 64, 128, 256, 512],
@@ -528,23 +529,29 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
         
         if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000.0
+            net_rates_Gbps = net_rates / 1e9  # Convert to Gbps for plotting
             
             # Track ranges
             all_rmse.extend(ranging_rmse_mm)
-            all_capacity.extend(capacities)
+            all_rates.extend(net_rates_Gbps)
             
+            # Save data
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_eff_{profile_name}'] = capacities.tolist()
-            data_to_save[f'num_points_{profile_name}'] = len(capacities)
+            data_to_save[f'net_rate_Gbps_{profile_name}'] = net_rates_Gbps.tolist()  # Save as Gbps
+            data_to_save[f'net_rate_bps_{profile_name}'] = net_rates.tolist()  # Also save raw bps
+            data_to_save[f'bandwidth_GHz_{profile_name}'] = system.profile.signal_bandwidth_Hz / 1e9
+            data_to_save[f'num_points_{profile_name}'] = len(net_rates)
             
-            ax.plot(ranging_rmse_mm, capacities,
+            # Plot
+            ax.plot(ranging_rmse_mm, net_rates_Gbps,
                    color=colors[profile_idx],
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    linestyle='-',
                    alpha=0.9,
-                   label=f'{profile_name.replace("_", " ")}',
+                   label=f'{profile_name.replace("_", " ")} ({system.profile.signal_bandwidth_Hz/1e9:.0f} GHz)',  # 显示带宽
                    zorder=5)
             
+            # Add markers
             if len(ranging_rmse_mm) > 5:
                 log_rmse = np.log10(ranging_rmse_mm)
                 marker_log = np.linspace(log_rmse.min(), log_rmse.max(), 
@@ -555,7 +562,7 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                     if idx not in marker_indices:
                         marker_indices.append(idx)
                 
-                ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
+                ax.plot(ranging_rmse_mm[marker_indices], net_rates_Gbps[marker_indices],
                        color=colors[profile_idx],
                        linestyle='None',
                        marker=markers[profile_idx],
@@ -564,10 +571,11 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'],
                        zorder=6)
             
-            print(f"    {profile_name}: {len(capacities)} frontier points")
+            print(f"    {profile_name}: {len(net_rates)} frontier points")
+            print(f"    Max rate: {np.max(net_rates_Gbps):.2f} Gbps")
     
     # AUTO-SCALE axes based on actual data with margins
-    if all_rmse and all_capacity:
+    if all_rmse and all_rates:
         # X-axis (log scale): add 20% margin on each side in log space
         rmse_min, rmse_max = min(all_rmse), max(all_rmse)
         log_range = np.log10(rmse_max) - np.log10(rmse_min)
@@ -576,33 +584,32 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
         ax.set_xlim(x_min, x_max)
         
         # Y-axis: add 10% margin
-        c_min, c_max = min(all_capacity), max(all_capacity)
-        c_range = c_max - c_min
-        y_min = max(0, c_min - 0.1 * c_range)
-        y_max = c_max + 0.2 * c_range  # More margin on top for legend
+        r_min, r_max = min(all_rates), max(all_rates)
+        r_range = r_max - r_min
+        y_min = max(0, r_min - 0.1 * r_range)
+        y_max = r_max + 0.2 * r_range  # More margin on top for legend
         ax.set_ylim(y_min, y_max)
     
     ax.set_xscale('log')
     
-    # Labels
+    # Labels - UPDATED
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Effective Spectral Efficiency (bits/symbol)', 
-                 fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('C-D Trade-off with Pilot Overhead',
+    ax.set_ylabel('Net Data Rate (Gbps)', fontsize=IEEEStyle.FONT_SIZES['label'])  # Changed
+    ax.set_title('C-D Trade-off with Net Rate (System-Level Performance)',  # Changed
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='best', fontsize=IEEEStyle.FONT_SIZES['legend'],
              frameon=True, edgecolor='black', framealpha=0.9)
     
-    # Add info box in available space
-    info_text = (r'$C_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}}$' + '\n' +
+    # Add info box with updated formula
+    info_text = (r'$R_{\mathrm{eff}} = (1 - M/K) \cdot C_{\mathrm{per\,symbol}} \cdot B$' + '\n' +
                 'Frame: K=1024, Power: ±15dB, Pilots: 8-512')
     
     # Find best position for text box (avoid data)
-    if all_capacity:
-        avg_c = np.mean(all_capacity)
-        if avg_c > (y_max + y_min) / 2:  # Data in upper half
+    if all_rates:
+        avg_r = np.mean(all_rates)
+        if avg_r > (y_max + y_min) / 2:  # Data in upper half
             text_y = 0.15  # Put text at bottom
         else:
             text_y = 0.85  # Put text at top
@@ -622,10 +629,10 @@ def plot_cd_frontier_all_profiles(save_name='fig_cd_frontier_all'):
     plt.close()
     
     data_saver.save_data(save_name, data_to_save,
-                       "C-D frontier with effective spectral efficiency")
+                       "C-D frontier with net rate (bits/s)")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-    
+        
     
 
 def plot_cd_frontier_pointing_sensitivity(save_name='fig_cd_pointing_sensitivity'):

@@ -335,10 +335,9 @@ def generate_cd_frontier(system, P_tx_scales=None, n_mc=50):
 
 
 def generate_cd_frontier_with_overhead(system, K_total=1024, P_tx_scales=None, n_mc=50):
-    """Generate C-D frontier with pilot overhead penalty."""
+    """Generate C-D frontier with pilot overhead penalty - NET RATE version."""
     
     if P_tx_scales is None:
-        # Power scaling range
         P_tx_scales = np.logspace(-2, +1, 50)  # Default 50 points
     
     pilot_counts = [8, 16, 32, 64, 128, 256]
@@ -359,14 +358,14 @@ def generate_cd_frontier_with_overhead(system, K_total=1024, P_tx_scales=None, n
                 I_x = system.calculate_mutual_information(p_uniform, P_tx_scale=P_scale, n_mc=n_mc)
                 C_per = np.mean(I_x)
                 
-                # Effective capacity with overhead
-                C_eff = (1.0 - alpha) * C_per
+                # NET RATE with overhead (bits/s)
+                R_eff = (1.0 - alpha) * C_per * system.profile.signal_bandwidth_Hz  # CHANGED
                 
                 # Distortion
                 distortion = system.calculate_distortion(p_uniform, P_tx_scale=P_scale, n_mc=n_mc)
                 
-                if 0 < distortion < 1e10 and C_eff > 0:
-                    all_points.append((distortion, C_eff))
+                if 0 < distortion < 1e10 and R_eff > 0:
+                    all_points.append((distortion, R_eff))  # Store rate instead of capacity
             except:
                 continue
     
@@ -378,22 +377,20 @@ def generate_cd_frontier_with_overhead(system, K_total=1024, P_tx_scales=None, n
     # Extract Pareto frontier
     all_points.sort(key=lambda x: x[0])
     pareto_D = []
-    pareto_C = []
-    max_C = -np.inf
+    pareto_R = []  # Changed from pareto_C
+    max_R = -np.inf
     
-    for D, C in all_points:
-        if C > max_C:
+    for D, R in all_points:
+        if R > max_R:
             pareto_D.append(D)
-            pareto_C.append(C)
-            max_C = C
+            pareto_R.append(R)
+            max_R = R
     
-    return np.array(pareto_D), np.array(pareto_C)
+    return np.array(pareto_D), np.array(pareto_R)
 
-# 文件: capacity_simulation.py
-# 修改 plot_cd_frontier 函数
 
 def plot_cd_frontier(save_name='fig_cd_frontier'):
-    """Plot C-D frontier with auto-scaled axes."""
+    """Plot C-D frontier with NET RATE and auto-scaled axes."""
     print(f"\n=== Generating {save_name} ===")
     
     fig, ax = plt.subplots(figsize=IEEEStyle.FIG_SIZES['single'])
@@ -402,12 +399,13 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     
     data_to_save = {
         'hardware_profiles': profiles_to_plot,
-        'frame_size': 1024
+        'frame_size': 1024,
+        'description': 'C-D frontier with net rate (bits/s)'
     }
     
     # Track data ranges
     all_rmse = []
-    all_capacity = []
+    all_rates = []  # Changed from all_capacity
     
     for profile_idx, profile_name in enumerate(profiles_to_plot):
         if profile_name not in HARDWARE_PROFILES:
@@ -416,7 +414,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         print(f"  Processing {profile_name}...")
         system = EnhancedISACSystem(profile_name)
         
-        distortions, capacities = generate_cd_frontier_with_overhead(
+        distortions, net_rates = generate_cd_frontier_with_overhead(
             system,
             K_total=1024,
             P_tx_scales=np.logspace(-2, +1, 80),
@@ -425,21 +423,26 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         
         if distortions.size > 0:
             ranging_rmse_mm = np.sqrt(distortions) * 1000
+            net_rates_Gbps = net_rates / 1e9  # Convert to Gbps
             
             # Track ranges
             all_rmse.extend(ranging_rmse_mm)
-            all_capacity.extend(capacities)
+            all_rates.extend(net_rates_Gbps)
             
+            # Save data
             data_to_save[f'ranging_rmse_mm_{profile_name}'] = ranging_rmse_mm.tolist()
-            data_to_save[f'capacity_{profile_name}'] = capacities.tolist()
-            data_to_save[f'num_points_{profile_name}'] = len(capacities)
+            data_to_save[f'net_rate_Gbps_{profile_name}'] = net_rates_Gbps.tolist()
+            data_to_save[f'net_rate_bps_{profile_name}'] = net_rates.tolist()
+            data_to_save[f'bandwidth_GHz_{profile_name}'] = system.profile.signal_bandwidth_Hz / 1e9
+            data_to_save[f'num_points_{profile_name}'] = len(net_rates)
             
+            # Add to diagnostics
             diagnostics.add_key_metric(
                 "CD_Frontier", 
-                f"{profile_name}_MaxCapacity", 
-                np.max(capacities), 
-                (0, 10), 
-                "bits/symbol"
+                f"{profile_name}_MaxRate_Gbps", 
+                np.max(net_rates_Gbps), 
+                (0, 1000), 
+                "Gbps"
             )
             diagnostics.add_key_metric(
                 "CD_Frontier",
@@ -449,16 +452,18 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                 "mm"
             )
             
-            ax.plot(ranging_rmse_mm, capacities,
+            # Plot with bandwidth in label
+            ax.plot(ranging_rmse_mm, net_rates_Gbps,
                    color=colors[profile_idx],
                    linewidth=IEEEStyle.LINE_PROPS['linewidth'],
                    linestyle='-',
-                   label=f'{profile_name.replace("_", " ")}')
+                   label=f'{profile_name.replace("_", " ")} ({system.profile.signal_bandwidth_Hz/1e9:.0f} GHz)')
             
+            # Add markers
             if len(ranging_rmse_mm) > 1:
                 marker_indices = np.linspace(0, len(ranging_rmse_mm)-1, 
                                             min(8, len(ranging_rmse_mm)), dtype=int)
-                ax.plot(ranging_rmse_mm[marker_indices], capacities[marker_indices],
+                ax.plot(ranging_rmse_mm[marker_indices], net_rates_Gbps[marker_indices],
                        color=colors[profile_idx],
                        linestyle='None',
                        marker=markers[profile_idx], 
@@ -467,7 +472,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                        markeredgewidth=IEEEStyle.LINE_PROPS['markeredgewidth'])
     
     # AUTO-SCALE axes
-    if all_rmse and all_capacity:
+    if all_rmse and all_rates:
         # X-axis (log scale)
         rmse_min, rmse_max = min(all_rmse), max(all_rmse)
         log_range = np.log10(rmse_max) - np.log10(rmse_min)
@@ -476,18 +481,18 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
         ax.set_xlim(x_min, x_max)
         
         # Y-axis
-        c_min, c_max = min(all_capacity), max(all_capacity)
-        c_range = c_max - c_min
-        y_min = max(0, c_min - 0.1 * c_range)
-        y_max = c_max + 0.2 * c_range
+        r_min, r_max = min(all_rates), max(all_rates)
+        r_range = r_max - r_min
+        y_min = max(0, r_min - 0.1 * r_range)
+        y_max = r_max + 0.2 * r_range
         ax.set_ylim(y_min, y_max)
     
     ax.set_xscale('log')
     
-    # Labels
+    # Labels - UPDATED
     ax.set_xlabel('Ranging RMSE (mm)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_ylabel('Effective Capacity (bits/symbol)', fontsize=IEEEStyle.FONT_SIZES['label'])
-    ax.set_title('Capacity-Distortion Trade-off', 
+    ax.set_ylabel('Net Data Rate (Gbps)', fontsize=IEEEStyle.FONT_SIZES['label'])
+    ax.set_title('Capacity-Distortion Trade-off (System-Level Net Rate)', 
                 fontsize=IEEEStyle.FONT_SIZES['title'])
     ax.grid(True, **IEEEStyle.GRID_PROPS)
     ax.legend(loc='best', fontsize=IEEEStyle.FONT_SIZES['legend'])
@@ -498,10 +503,10 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
     plt.close()
     
     data_saver.save_data(save_name, data_to_save,
-                       "Capacity-Distortion frontier with pilot overhead")
+                       "Capacity-Distortion frontier with net rate")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-            
+               
 
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     """Plot capacity vs SNR for all hardware profiles - IEEE style."""
