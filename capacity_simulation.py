@@ -260,26 +260,46 @@ class EnhancedISACSystem:
         return J_B
     
     def calculate_distortion(self, p_x: np.ndarray, P_tx_scale: float = 1.0,
-                           n_mc: int = 100) -> float:
-        """Calculate sensing distortion with MC averaging."""
+                        n_mc: int = 100) -> float:
+        """Calculate sensing distortion (MSE of range estimation).
+        
+        Args:
+            p_x: Symbol probability distribution
+            P_tx_scale: Transmit power scaling factor
+            n_mc: Monte Carlo samples for averaging
+        
+        Returns:
+            float: Mean Squared Error (MSE) of range estimation in meters squared [m²]
+                This is the variance σ_R² from the CRLB
+        
+        Note:
+            - Return value is MSE (variance) in m²
+            - To get RMSE in mm: rmse_mm = np.sqrt(mse) * 1000
+        """
         avg_power = np.sum(p_x * np.abs(self.constellation)**2)
         
         if avg_power < 1e-10:
-            return 1e10
+            return 1e10  # Return large MSE for invalid input
         
         J_B = self.calculate_bfim_observable_mc(avg_power, P_tx_scale, n_mc)
         
         try:
             J_B_inv = inv(J_B)
-            distortion = J_B_inv[0,0]  # Range variance only
+            mse_range = J_B_inv[0,0]  # This is σ_R² (variance/MSE) in m²
             
-            if distortion < 0 or distortion > 1e15:
+            # Sanity check
+            if mse_range < 0:
+                print(f"Warning: Negative MSE detected: {mse_range}")
+                return 1e10
+            if mse_range > 1e15:
+                print(f"Warning: Extremely large MSE: {mse_range}")
                 return 1e10
                 
         except np.linalg.LinAlgError:
+            print("Warning: FIM matrix singular")
             return 1e10
-            
-        return distortion
+        
+        return mse_range  # Return MSE in m²
 
 # =========================================================================
 # INDIVIDUAL PLOT FUNCTIONS WITH INTEGRATED DIAGNOSTICS
@@ -506,7 +526,7 @@ def plot_cd_frontier(save_name='fig_cd_frontier'):
                        "Capacity-Distortion frontier with net rate")
     
     print(f"Saved: results/{save_name}.pdf/png and data")
-               
+
 
 def plot_capacity_vs_snr(save_name='fig_capacity_vs_snr'):
     """Plot capacity vs SNR for all hardware profiles - IEEE style."""
